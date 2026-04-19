@@ -25,8 +25,8 @@ const EMPTY: StoredSettings = { integrations: {}, accountMappings: {} };
 async function readRaw(): Promise<StoredSettings> {
   try {
     const raw = await readFile(SETTINGS_FILE, "utf8");
-    const parsed = JSON.parse(raw) as StoredSettings;
-    return { integrations: {}, ...parsed };
+    const parsed = JSON.parse(raw) as Partial<StoredSettings>;
+    return { ...parsed, integrations: parsed.integrations ?? {} };
   } catch {
     return { ...EMPTY };
   }

@@ -4,6 +4,7 @@ const styles: Record<DataSource["status"], string> = {
   ready: "bg-emerald-100 text-emerald-800 border-emerald-200",
   planned: "bg-amber-100 text-amber-800 border-amber-200",
   "formula-driven": "bg-slate-100 text-slate-700 border-slate-200",
+  manual: "bg-sky-100 text-sky-800 border-sky-200",
 };
 
 const kindLabel: Record<DataSource["kind"], string> = {

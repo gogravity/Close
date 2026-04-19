@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import { sections } from "@/lib/recon";
 import { getEntityConfig, getAccountMappings } from "@/lib/settings";
 import { listAccounts, BusinessCentralError } from "@/lib/businessCentral";
@@ -91,7 +92,9 @@ export default async function Sidebar() {
         <div className="mt-4 px-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
           Balance Sheet Reconciliation
         </div>
-        <SidebarNav sections={navSections} />
+        <Suspense fallback={<ul className="mt-1 space-y-0.5" />}>
+          <SidebarNav sections={navSections} />
+        </Suspense>
         <div className="mt-4 space-y-0.5 border-t border-slate-200 pt-3">
           <Link
             href="/export"

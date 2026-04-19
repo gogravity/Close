@@ -83,11 +83,6 @@ export default function ArReconClient({
   const adjustment = expectedAllowance - currentAllowance;
   const materialAdjustment = Math.abs(adjustment) >= 0.01;
 
-
-  function setRate(k: keyof typeof rates, v: number) {
-    setRates((r) => ({ ...r, [k]: v }));
-  }
-
   return (
     <div className="space-y-6">
       {/* 4-panel header strip */}

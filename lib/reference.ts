@@ -4,7 +4,11 @@ import "server-only";
 
 const REFERENCE_FILE = path.join(process.cwd(), ".data", "reference-balances.json");
 
-export type ReferenceBalance = { account: string; balance: number };
+export type ReferenceBalance = {
+  account: string;
+  balance: number;
+  classification?: "Assets" | "Liabilities" | "Equity";
+};
 
 export type ReferenceData = {
   source: string;

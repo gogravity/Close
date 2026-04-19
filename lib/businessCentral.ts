@@ -343,6 +343,32 @@ export type BcPurchaseInvoice = {
 };
 
 /**
+ * Posted purchase invoices with invoice date in [startDate, endDate] (inclusive).
+ * Used to cross-reference GL entry documentNumbers back to vendor names.
+ */
+export async function listPurchaseInvoicesRange(
+  startDate: string,
+  endDate: string
+): Promise<BcPurchaseInvoice[]> {
+  const companyId = await getSelectedCompanyId();
+  const filter = `invoiceDate ge ${startDate} and invoiceDate le ${endDate}`;
+  const path =
+    `/companies(${companyId})/purchaseInvoices?` +
+    `$filter=${encodeURIComponent(filter)}&` +
+    `$select=id,number,invoiceDate,vendorId,vendorNumber,vendorName,status,totalAmountIncludingTax`;
+  const out: BcPurchaseInvoice[] = [];
+  let next: string | null = path;
+  while (next) {
+    const page: BcPage<BcPurchaseInvoice> = next.startsWith("http")
+      ? await bcGetAbsolute<BcPage<BcPurchaseInvoice>>(next)
+      : await bcGet<BcPage<BcPurchaseInvoice>>(next);
+    out.push(...page.value);
+    next = page["@odata.nextLink"] ?? null;
+  }
+  return out;
+}
+
+/**
  * Returns open purchase invoices whose dimensionSetLines include an
  * INTERCOMPANY dimension value — i.e. AP bills that should be reclassed from
  * regular AP (e.g. 200010) to the intercompany payable account (117950).
@@ -524,6 +550,76 @@ export async function listGlEntries(
   return out;
 }
 
+export type BcDimensionLine = {
+  code: string;
+  valueCode: string;
+  valueDisplayName: string;
+};
+
+export type BcGlLedgerEntryWithDims = BcGlLedgerEntry & {
+  dimensionSetLines?: BcDimensionLine[];
+};
+
+/**
+ * GL entries posted in [startDate, endDate] across ALL accounts (or filtered
+ * by a set of account numbers), with dimensionSetLines expanded when BC
+ * supports it on this endpoint. Falls back silently to no-dimensions if BC
+ * rejects the $expand — `dimensionSetLines` will be undefined on each row.
+ */
+export async function listGlEntriesRange(
+  startDate: string,
+  endDate: string,
+  accountNumbers?: string[]
+): Promise<BcGlLedgerEntryWithDims[]> {
+  const companyId = await getSelectedCompanyId();
+  const parts: string[] = [`postingDate ge ${startDate}`, `postingDate le ${endDate}`];
+  if (accountNumbers && accountNumbers.length > 0) {
+    const acctClause = accountNumbers
+      .map((n) => `accountNumber eq '${n}'`)
+      .join(" or ");
+    parts.push(`(${acctClause})`);
+  }
+  const filter = parts.join(" and ");
+  const baseSelect = `entryNumber,postingDate,documentNumber,documentType,accountNumber,description,debitAmount,creditAmount`;
+
+  const withExpand =
+    `/companies(${companyId})/generalLedgerEntries?` +
+    `$filter=${encodeURIComponent(filter)}&` +
+    `$select=${baseSelect}&` +
+    `$expand=dimensionSetLines&` +
+    `$orderby=postingDate,entryNumber`;
+  const withoutExpand =
+    `/companies(${companyId})/generalLedgerEntries?` +
+    `$filter=${encodeURIComponent(filter)}&` +
+    `$select=${baseSelect}&` +
+    `$orderby=postingDate,entryNumber`;
+
+  async function pageThrough(startPath: string): Promise<BcGlLedgerEntryWithDims[]> {
+    const out: BcGlLedgerEntryWithDims[] = [];
+    let next: string | null = startPath;
+    while (next) {
+      const page: BcPage<BcGlLedgerEntryWithDims> = next.startsWith("http")
+        ? await bcGetAbsolute<BcPage<BcGlLedgerEntryWithDims>>(next)
+        : await bcGet<BcPage<BcGlLedgerEntryWithDims>>(next);
+      out.push(...page.value);
+      next = page["@odata.nextLink"] ?? null;
+    }
+    return out;
+  }
+
+  try {
+    return await pageThrough(withExpand);
+  } catch (err) {
+    // If BC doesn't support $expand on generalLedgerEntries (some tenants
+    // return 400/501), fall back to the un-expanded query so the P&L still
+    // renders — just without dimension breakouts.
+    if (err instanceof BusinessCentralError && (err.status === 400 || err.status === 501)) {
+      return pageThrough(withoutExpand);
+    }
+    throw err;
+  }
+}
+
 async function bcGetAbsolute<T>(absoluteUrl: string): Promise<T> {
   const creds = await loadCredentials();
   const token = await getAccessToken(creds);
@@ -547,6 +643,48 @@ async function bcGetAbsolute<T>(absoluteUrl: string): Promise<T> {
     );
   }
   return JSON.parse(text) as T;
+}
+
+export type BcSalesInvoice = {
+  id: string;
+  number: string;
+  externalDocumentNumber?: string;
+  invoiceDate: string;
+  dueDate: string;
+  customerId: string;
+  customerNumber: string;
+  customerName: string;
+  status: string;
+  totalAmountIncludingTax: number;
+  remainingAmount?: number;
+};
+
+/**
+ * Posted sales invoices with invoice date in [startDate, endDate] (inclusive).
+ * BC returns posted invoices via `/salesInvoices` — drafts/quotes live on other
+ * endpoints and aren't useful for a GL-level reconciliation.
+ */
+export async function listSalesInvoices(
+  startDate: string,
+  endDate: string
+): Promise<BcSalesInvoice[]> {
+  const companyId = await getSelectedCompanyId();
+  const filter = `invoiceDate ge ${startDate} and invoiceDate le ${endDate}`;
+  const path =
+    `/companies(${companyId})/salesInvoices?` +
+    `$filter=${encodeURIComponent(filter)}&` +
+    `$select=id,number,externalDocumentNumber,invoiceDate,dueDate,customerId,customerNumber,customerName,status,totalAmountIncludingTax,remainingAmount&` +
+    `$orderby=invoiceDate`;
+  const out: BcSalesInvoice[] = [];
+  let next: string | null = path;
+  while (next) {
+    const page: BcPage<BcSalesInvoice> = next.startsWith("http")
+      ? await bcGetAbsolute<BcPage<BcSalesInvoice>>(next)
+      : await bcGet<BcPage<BcSalesInvoice>>(next);
+    out.push(...page.value);
+    next = page["@odata.nextLink"] ?? null;
+  }
+  return out;
 }
 
 export async function getSelectedCompany(): Promise<BcCompany | null> {

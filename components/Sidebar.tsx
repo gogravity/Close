@@ -81,12 +81,20 @@ export default async function Sidebar() {
         </div>
         <ul className="mt-1 space-y-0.5">
           <li>
-            <span
-              className="block rounded px-3 py-1.5 text-sm text-slate-400 italic cursor-not-allowed"
-              title="Coming soon"
+            <Link
+              href="/data-prep/invoice-validation"
+              className="block rounded px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-200 hover:text-slate-900"
             >
-              Coming soon
-            </span>
+              Invoice Validation
+            </Link>
+          </li>
+          <li>
+            <Link
+              href="/data-prep/pl-comparison"
+              className="block rounded px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-200 hover:text-slate-900"
+            >
+              P&amp;L Comparison
+            </Link>
           </li>
         </ul>
         <div className="mt-4 px-3 text-xs font-semibold uppercase tracking-wide text-slate-500">

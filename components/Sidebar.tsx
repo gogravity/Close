@@ -116,30 +116,6 @@ export default async function Sidebar() {
         </ul>
         <div className="mt-4 space-y-0.5 border-t border-slate-200 pt-3">
           <Link
-            href="/export"
-            className="block rounded bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800"
-          >
-            ⬇ Export Close Package
-          </Link>
-          <Link
-            href="/plan"
-            className="block rounded px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-200 hover:text-slate-900"
-          >
-            Recon Plan
-          </Link>
-          <Link
-            href="/mapping"
-            className="block rounded px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-200 hover:text-slate-900"
-          >
-            Account Mapping
-          </Link>
-          <Link
-            href="/validate"
-            className="block rounded px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-200 hover:text-slate-900"
-          >
-            Validation
-          </Link>
-          <Link
             href="/settings"
             className="block rounded px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-200 hover:text-slate-900"
           >

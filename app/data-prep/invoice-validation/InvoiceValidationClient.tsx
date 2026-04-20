@@ -26,8 +26,7 @@ type CustomerGroup = {
 
 type ReconResponse = {
   ok: true;
-  monthA: { year: number; month: number; start: string; end: string };
-  monthB: { year: number; month: number; start: string; end: string };
+  period: { start: string; end: string };
   customers: CustomerGroup[];
   totals: { cw: number; bc: number; discrepancies: number; customers: number; invoices: number };
 };
@@ -35,13 +34,13 @@ type ReconResponse = {
 type ErrorResponse = { ok: false; error: string; status?: number; body?: unknown };
 
 type Props = {
-  defaultMonthA: string;
-  defaultMonthB: string;
+  defaultStartDate: string;
+  defaultEndDate: string;
 };
 
-export default function InvoiceValidationClient({ defaultMonthA, defaultMonthB }: Props) {
-  const [monthA, setMonthA] = useState(defaultMonthA);
-  const [monthB, setMonthB] = useState(defaultMonthB);
+export default function InvoiceValidationClient({ defaultStartDate, defaultEndDate }: Props) {
+  const [startDate, setStartDate] = useState(defaultStartDate);
+  const [endDate, setEndDate] = useState(defaultEndDate);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<ReconResponse | null>(null);
   const [err, setErr] = useState<ErrorResponse | null>(null);
@@ -55,7 +54,7 @@ export default function InvoiceValidationClient({ defaultMonthA, defaultMonthB }
       const res = await fetch("/api/invoice-validation", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ monthA, monthB }),
+        body: JSON.stringify({ startDate, endDate }),
       });
       const json = (await res.json()) as ReconResponse | ErrorResponse;
       if (!json.ok) {
@@ -82,27 +81,27 @@ export default function InvoiceValidationClient({ defaultMonthA, defaultMonthB }
     <div className="space-y-5">
       <div className="flex flex-wrap items-end gap-4 rounded border border-slate-200 bg-white px-4 py-3">
         <label className="text-sm">
-          <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Month A</div>
+          <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Start Date</div>
           <input
-            type="month"
-            value={monthA}
-            onChange={(e) => setMonthA(e.target.value)}
+            type="date"
+            value={startDate}
+            onChange={(e) => setStartDate(e.target.value)}
             className="mt-1 rounded border border-slate-300 px-2 py-1 font-mono text-sm"
           />
         </label>
         <label className="text-sm">
-          <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Month B</div>
+          <div className="text-xs font-medium uppercase tracking-wide text-slate-500">End Date</div>
           <input
-            type="month"
-            value={monthB}
-            onChange={(e) => setMonthB(e.target.value)}
+            type="date"
+            value={endDate}
+            onChange={(e) => setEndDate(e.target.value)}
             className="mt-1 rounded border border-slate-300 px-2 py-1 font-mono text-sm"
           />
         </label>
         <button
           type="button"
           onClick={run}
-          disabled={loading || !monthA || !monthB}
+          disabled={loading || !startDate || !endDate}
           className="rounded bg-slate-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {loading ? "Running…" : "Run reconciliation"}
@@ -162,7 +161,7 @@ export default function InvoiceValidationClient({ defaultMonthA, defaultMonthB }
                 {visibleCustomers.length === 0 && (
                   <tr>
                     <td colSpan={7} className="px-3 py-8 text-center text-slate-500">
-                      No customers to display for the selected months.
+                      No customers to display for the selected period.
                     </td>
                   </tr>
                 )}
@@ -270,18 +269,10 @@ function InvoiceTable({ invoices }: { invoices: InvoiceEntry[] }) {
               <td className="px-2 py-1 font-mono text-slate-600">{inv.date}</td>
               <td className="px-2 py-1 font-mono">{inv.invoiceNumber}</td>
               <td className="px-2 py-1 text-right tabular-nums">
-                {inv.cwAmount === null ? (
-                  <span className="text-red-700">—</span>
-                ) : (
-                  fmt(inv.cwAmount)
-                )}
+                {inv.cwAmount === null ? <span className="text-red-700">—</span> : fmt(inv.cwAmount)}
               </td>
               <td className="px-2 py-1 text-right tabular-nums">
-                {inv.bcAmount === null ? (
-                  <span className="text-red-700">—</span>
-                ) : (
-                  fmt(inv.bcAmount)
-                )}
+                {inv.bcAmount === null ? <span className="text-red-700">—</span> : fmt(inv.bcAmount)}
               </td>
               <td
                 className={`px-2 py-1 text-right tabular-nums ${
@@ -301,14 +292,9 @@ function InvoiceTable({ invoices }: { invoices: InvoiceEntry[] }) {
 
 function statusLabel(s: InvoiceEntry["status"]): string {
   switch (s) {
-    case "match":
-      return "Matched";
-    case "amount-mismatch":
-      return "Amount mismatch";
-    case "missing-cw":
-      return "Missing in CW";
-    case "missing-bc":
-      return "Missing in BC";
+    case "match": return "Matched";
+    case "amount-mismatch": return "Amount mismatch";
+    case "missing-cw": return "Missing in CW";
+    case "missing-bc": return "Missing in BC";
   }
 }
-

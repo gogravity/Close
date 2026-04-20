@@ -81,13 +81,20 @@ export default async function Sidebar() {
         </div>
       </div>
       <nav className="p-3">
-        <Link
-          href="/"
-          className="block rounded px-3 py-2 text-sm font-medium text-slate-900 hover:bg-slate-200"
-        >
-          Balance Sheet Summary
-        </Link>
         <DataPrepNav />
+        <div className="mt-4 px-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+          Balance Sheet Summary
+        </div>
+        <ul className="mt-1 space-y-0.5">
+          <li>
+            <Link
+              href="/"
+              className="block rounded px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-200 hover:text-slate-900"
+            >
+              Dashboard
+            </Link>
+          </li>
+        </ul>
         <div className="mt-4 px-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
           Balance Sheet Reconciliation
         </div>

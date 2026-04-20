@@ -26,7 +26,7 @@ export default function DataPrepNav() {
             <li key={item.href}>
               <Link
                 href={item.href}
-                className={`block rounded px-3 py-1.5 text-sm ${
+                className={`block rounded py-1.5 pl-6 pr-3 text-sm ${
                   isActive
                     ? "bg-slate-200 font-medium text-slate-900"
                     : "text-slate-700 hover:bg-slate-200 hover:text-slate-900"

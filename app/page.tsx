@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { accounts, sections, fmt, type Account } from "@/lib/recon";
 import { loadBalances, balanceOf } from "@/lib/balances";
 import { getEntityConfig } from "@/lib/settings";
+import MetricCard from "@/components/MetricCard";
 
 export const dynamic = "force-dynamic";
 
@@ -38,9 +39,9 @@ export default async function Home() {
       </header>
 
       <div className="grid grid-cols-3 gap-3 mb-8">
-        <Stat label="Total Assets" value={fmt(totalAssets)} tone="neutral" />
-        <Stat label="Total Liabilities + Equity" value={fmt(-(totalLiab + totalEquity))} tone="neutral" />
-        <Stat
+        <MetricCard label="Total Assets" value={fmt(totalAssets)} />
+        <MetricCard label="Total Liabilities + Equity" value={fmt(-(totalLiab + totalEquity))} />
+        <MetricCard
           label="Check (A − L − E)"
           value={fmt(check)}
           tone={Math.abs(check) < 1 ? "ok" : "warn"}
@@ -79,28 +80,6 @@ export default async function Home() {
   );
 }
 
-function Stat({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone: "neutral" | "ok" | "warn";
-}) {
-  const toneClass =
-    tone === "ok"
-      ? "text-emerald-700"
-      : tone === "warn"
-      ? "text-amber-700"
-      : "text-slate-900";
-  return (
-    <div className="rounded border border-slate-200 px-4 py-3">
-      <div className="text-xs uppercase tracking-wide text-slate-500">{label}</div>
-      <div className={`mt-1 text-xl font-semibold tabular-nums ${toneClass}`}>{value}</div>
-    </div>
-  );
-}
 
 function BsSection({ title, rows }: { title: string; rows: Row[] }) {
   const total = rows.reduce((s, r) => s + r.balance, 0);

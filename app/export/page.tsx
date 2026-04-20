@@ -1,16 +1,9 @@
 import { redirect } from "next/navigation";
 import { getEntityConfig } from "@/lib/settings";
 import { buildClosePackage } from "@/lib/export";
+import { fmt } from "@/lib/recon";
 
 export const dynamic = "force-dynamic";
-
-function fmt(n: number | null): string {
-  if (n === null) return "";
-  if (n === 0) return "–";
-  const abs = Math.abs(n);
-  const s = abs.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return n < 0 ? `($${s})` : `$${s}`;
-}
 
 export default async function ExportPage() {
   const entity = await getEntityConfig();
@@ -85,7 +78,7 @@ export default async function ExportPage() {
                     <td className="px-3 py-1.5 font-mono text-xs text-slate-600">
                       {r.matchedNumber} — {r.matchedName}
                     </td>
-                    <td className="px-3 py-1.5 text-right tabular-nums">{fmt(r.balance)}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums">{r.balance != null ? fmt(r.balance) : "—"}</td>
                   </tr>
                 ))}
             </tbody>

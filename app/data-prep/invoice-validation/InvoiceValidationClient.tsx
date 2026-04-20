@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { fmt } from "@/lib/recon";
+import MetricCard from "@/components/MetricCard";
 
 type InvoiceEntry = {
   invoiceNumber: string;
@@ -133,13 +134,13 @@ export default function InvoiceValidationClient({ defaultMonthA, defaultMonthB }
       {result && (
         <>
           <div className="grid grid-cols-5 gap-3">
-            <Panel label="Customers" value={String(result.totals.customers)} />
-            <Panel label="Invoices matched" value={String(result.totals.invoices)} />
-            <Panel label="CW total" value={fmt(result.totals.cw)} />
-            <Panel label="BC total" value={fmt(result.totals.bc)} />
-            <Panel
+            <MetricCard label="Customers" value={result.totals.customers} />
+            <MetricCard label="Invoices matched" value={result.totals.invoices} />
+            <MetricCard label="CW total" value={fmt(result.totals.cw)} />
+            <MetricCard label="BC total" value={fmt(result.totals.bc)} />
+            <MetricCard
               label="Discrepancies"
-              value={String(result.totals.discrepancies)}
+              value={result.totals.discrepancies}
               tone={result.totals.discrepancies > 0 ? "warn" : "ok"}
             />
           </div>
@@ -311,25 +312,3 @@ function statusLabel(s: InvoiceEntry["status"]): string {
   }
 }
 
-function Panel({
-  label,
-  value,
-  tone = "neutral",
-}: {
-  label: string;
-  value: string;
-  tone?: "neutral" | "ok" | "warn";
-}) {
-  const toneClass =
-    tone === "warn"
-      ? "border-amber-200 bg-amber-50 text-amber-900"
-      : tone === "ok"
-        ? "border-emerald-200 bg-emerald-50 text-emerald-900"
-        : "border-slate-200 bg-white text-slate-900";
-  return (
-    <div className={`rounded border px-3 py-2 ${toneClass}`}>
-      <div className="text-[10px] font-medium uppercase tracking-wide opacity-70">{label}</div>
-      <div className="mt-0.5 font-mono text-base tabular-nums">{value}</div>
-    </div>
-  );
-}

@@ -3,6 +3,7 @@ import { getEntityConfig } from "@/lib/settings";
 import { loadCatalog, planFor, type AutomationStrategy } from "@/lib/reconPlan";
 import { fmt } from "@/lib/recon";
 import { getAccountBalances } from "@/lib/businessCentral";
+import MetricCard from "@/components/MetricCard";
 
 export const dynamic = "force-dynamic";
 
@@ -90,10 +91,10 @@ export default async function PlanPage() {
       </header>
 
       <div className="mb-6 grid grid-cols-4 gap-3">
-        <StatPill label="Automatable tabs" value={statusCounts.automatable} tone="emerald" />
-        <StatPill label="Partial / deps pending" value={statusCounts.partial} tone="amber" />
-        <StatPill label="Manual-only" value={statusCounts["manual-only"]} tone="slate" />
-        <StatPill label="Dormant / closed" value={statusCounts.dormant} tone="slate" />
+        <MetricCard label="Automatable tabs" value={statusCounts.automatable} tone="ok" />
+        <MetricCard label="Partial / deps pending" value={statusCounts.partial} tone="warn" />
+        <MetricCard label="Manual-only" value={statusCounts["manual-only"]} />
+        <MetricCard label="Dormant / closed" value={statusCounts.dormant} />
       </div>
 
       <div className="overflow-hidden rounded border border-slate-200 bg-white">
@@ -181,24 +182,3 @@ export default async function PlanPage() {
   );
 }
 
-function StatPill({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: number;
-  tone: "emerald" | "amber" | "slate";
-}) {
-  const cls = {
-    emerald: "border-emerald-200 text-emerald-800",
-    amber: "border-amber-200 text-amber-800",
-    slate: "border-slate-200 text-slate-700",
-  }[tone];
-  return (
-    <div className={`rounded border bg-white px-4 py-3 ${cls}`}>
-      <div className="text-xs uppercase tracking-wide opacity-70">{label}</div>
-      <div className="mt-1 text-2xl font-semibold tabular-nums">{value}</div>
-    </div>
-  );
-}

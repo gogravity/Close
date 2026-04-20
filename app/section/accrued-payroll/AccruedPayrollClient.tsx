@@ -247,7 +247,7 @@ function ReconRow({
 function JeTable({ snapshot }: { snapshot: AccruedPayrollSnapshot }) {
   return (
     <table className="w-full text-sm">
-      <thead className="bg-white text-slate-600">
+      <thead className="bg-slate-50 text-slate-600">
         <tr>
           <th className="px-3 py-2 text-left font-medium w-[80px]">Acct</th>
           <th className="px-3 py-2 text-left font-medium">Name</th>
@@ -270,7 +270,7 @@ function JeTable({ snapshot }: { snapshot: AccruedPayrollSnapshot }) {
             </td>
           </tr>
         ))}
-        <tr className="border-t-2 border-slate-700 bg-slate-50 font-semibold">
+        <tr className="border-t-2 border-slate-300 bg-slate-50 font-semibold">
           <td className="px-3 py-2" colSpan={3}>
             Totals
           </td>

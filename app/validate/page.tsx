@@ -2,15 +2,9 @@ import { redirect } from "next/navigation";
 import { getEntityConfig } from "@/lib/settings";
 import { listAccounts, getAccountBalances, BusinessCentralError } from "@/lib/businessCentral";
 import { loadReferenceBalances } from "@/lib/reference";
+import { fmt } from "@/lib/recon";
 
 export const dynamic = "force-dynamic";
-
-function fmt(n: number): string {
-  if (n === 0) return "–";
-  const abs = Math.abs(n);
-  const s = abs.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return n < 0 ? `($${s})` : `$${s}`;
-}
 
 export default async function ValidatePage() {
   const entity = await getEntityConfig();

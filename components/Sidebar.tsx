@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Suspense } from "react";
+import { headers } from "next/headers";
 import { sections } from "@/lib/recon";
 import { getEntityConfig, getAccountMappings } from "@/lib/settings";
 import { listAccounts, BusinessCentralError } from "@/lib/businessCentral";
@@ -8,6 +9,15 @@ import DataPrepNav from "./DataPrepNav";
 
 export default async function Sidebar() {
   const { name, periodEnd } = await getEntityConfig();
+
+  // EasyAuth (Azure Container Apps) injects the signed-in user's identity in
+  // request headers. Read them here so the sidebar can show who's logged in
+  // and wire a sign-out that clears the EasyAuth session cookie.
+  const h = await headers();
+  const signedInAs =
+    h.get("x-ms-client-principal-name") ??
+    h.get("x-ms-client-principal-idp-upn") ??
+    null;
 
   // Build sub-tabs per section from the user's /mapping assignments.
   // If BC isn't reachable we fall back to sections with no sub-tabs (the
@@ -128,6 +138,27 @@ export default async function Sidebar() {
           >
             ⚙ Settings
           </Link>
+        </div>
+        {/* EasyAuth sign-out. /.auth/logout clears the Container App's auth
+            cookie; post_logout_redirect_uri sends the user back to / which
+            re-triggers the Entra sign-in flow. Use a plain <a> so Next's
+            client router doesn't intercept the platform endpoint. */}
+        <div className="mt-4 border-t border-slate-200 pt-3 px-3">
+          {signedInAs && (
+            <div
+              className="mb-1.5 truncate text-[11px] text-slate-500"
+              title={signedInAs}
+            >
+              Signed in as{" "}
+              <span className="font-medium text-slate-700">{signedInAs}</span>
+            </div>
+          )}
+          <a
+            href="/.auth/logout?post_logout_redirect_uri=/"
+            className="block rounded px-0 py-1.5 text-sm font-medium text-slate-600 hover:text-slate-900"
+          >
+            ⎋ Sign out
+          </a>
         </div>
       </nav>
     </aside>

@@ -498,3 +498,59 @@ export async function listAllCompanyNames(): Promise<string[]> {
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// Payroll section — full time-entry fetch with member / agreement / dept context
+// ---------------------------------------------------------------------------
+
+export type CwPayrollTimeEntry = {
+  id: number;
+  timeStart?: string;
+  dateEntered?: string;
+  actualHours?: number;
+  hoursBilled?: number;
+  hourlyCost?: number;
+  hourlyRate?: number;
+  billableOption?: string; // Billable | DoNotBill | NoCharge | NoDefault
+  member?: { id?: number; identifier?: string; name?: string };
+  department?: { id?: number; name?: string };
+  agreement?: { id?: number; name?: string; type?: string };
+  /** CW duplicates the agreement type onto the entry itself — useful when the
+   *  agreement object isn't populated but the type label still is. */
+  agreementType?: string;
+  ticket?: { id?: number; name?: string; summary?: string };
+  ticketBoard?: string;
+  ticketType?: string;
+  chargeToType?: string;
+  chargeToId?: number;
+  company?: { id?: number; name?: string };
+  workType?: { id?: number; name?: string };
+  notes?: string;
+};
+
+/**
+ * All time entries with timeStart in [startDate, endDate]. Used by the payroll
+ * allocation page — we need full context (agreement, department, ticket board,
+ * etc.) to bucket each entry, which is why we don't narrow $select here.
+ */
+export async function listTimeEntriesForRange(
+  startDate: string,
+  endDate: string
+): Promise<CwPayrollTimeEntry[]> {
+  const cond =
+    `timeStart >= [${startDate}T00:00:00Z] and timeStart <= [${endDate}T23:59:59Z]`;
+  const pageSize = 1000;
+  const out: CwPayrollTimeEntry[] = [];
+  let page = 1;
+  while (true) {
+    const rows = await cwGet<CwPayrollTimeEntry[]>(
+      `/time/entries?conditions=${encodeURIComponent(
+        cond
+      )}&orderBy=timeStart&page=${page}&pageSize=${pageSize}`
+    );
+    out.push(...rows);
+    if (rows.length < pageSize) break;
+    page += 1;
+  }
+  return out;
+}

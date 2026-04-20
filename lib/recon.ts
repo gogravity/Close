@@ -163,11 +163,23 @@ export const sections: Section[] = [
     ],
   },
   {
+    slug: "accrued-payroll",
+    title: "Accrued Payroll",
+    order: 8,
+    accounts: ["Wages Payable", "Accrued Wages"],
+    subtabs: ["Accrued Payroll"],
+    dataSources: [
+      { kind: "api", system: "ConnectWise", status: "planned", note: "Per-member allocation percentages from time entries" },
+      { kind: "manual", system: "Gusto", status: "manual", note: "Payroll Journal Report CSV upload; drives the JE" },
+      { kind: "api", system: "Business Central", status: "planned", note: "TB balance for reconciliation + JE post" },
+    ],
+  },
+  {
     slug: "payroll-liabilities",
     title: "Payroll Liabilities",
-    order: 8,
-    accounts: ["Wages Payable", "Accrued Payroll Tax", "Accrued 401K Match", "Employee FSA Liability", "Accrued Other Employee Benefits"],
-    subtabs: ["Accrued Payroll", "Employee Benefit Liabilities", "HSA Contribution Liability"],
+    order: 9,
+    accounts: ["Accrued Payroll Tax", "Accrued 401K Match", "Employee FSA Liability", "Accrued Other Employee Benefits"],
+    subtabs: ["Employee Benefit Liabilities", "HSA Contribution Liability"],
     dataSources: [
       { kind: "api", system: "Gusto", status: "planned", note: "Payroll runs, period-end accrual, ER taxes, 401k match, HSA/FSA" },
       { kind: "api", system: "Business Central", status: "planned", note: "Post accrual JE + reconcile GL" },
@@ -176,7 +188,7 @@ export const sections: Section[] = [
   {
     slug: "accrued-expenses",
     title: "Accrued Expenses",
-    order: 9,
+    order: 10,
     accounts: ["Accrued Expenses", "Accrued Bonus", "Accrued PTO"],
     subtabs: ["Accrued Expenses", "Accrued Bonus", "Accrued PTO"],
     dataSources: [
@@ -187,7 +199,7 @@ export const sections: Section[] = [
   {
     slug: "tax-liabilities",
     title: "Tax Liabilities",
-    order: 10,
+    order: 11,
     accounts: ["Sales Tax Payable, Current", "VoIP Taxes Withheld"],
     subtabs: ["Sales Tax Payable", "Sales Tax"],
     dataSources: [
@@ -198,7 +210,7 @@ export const sections: Section[] = [
   {
     slug: "deferred-revenue",
     title: "Deferred Revenue",
-    order: 11,
+    order: 12,
     accounts: ["Deferred Revenue"],
     subtabs: ["Deferred Revenue Reconciliation", "Annual & Block Hours"],
     dataSources: [
@@ -209,7 +221,7 @@ export const sections: Section[] = [
   {
     slug: "unbilled-revenue",
     title: "Unbilled Revenue",
-    order: 12,
+    order: 13,
     accounts: ["Unbilled Revenue, Current"],
     subtabs: ["Unbilled Revenue Rec", "Unbilled Time / Labor", "Unbilled Cloud (Recurring)", "Unbilled Cloud (Non-Recurring)"],
     dataSources: [

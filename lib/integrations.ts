@@ -8,7 +8,7 @@ export type IntegrationField = {
   help?: string;
 };
 
-export type IntegrationCategory = "gl" | "psa" | "payroll" | "spend" | "ai";
+export type IntegrationCategory = "gl" | "psa" | "payroll" | "spend" | "ai" | "crm";
 
 export type Integration = {
   id: string;
@@ -75,6 +75,23 @@ export const integrations: Integration[] = [
     ],
   },
   {
+    id: "hubspot",
+    name: "HubSpot",
+    category: "crm",
+    blurb:
+      "CRM pipeline. Feeds signed-not-onboarded MRR (closed-won deals not yet billed through BC/CW) into the MRR bridge.",
+    docsUrl: "https://developers.hubspot.com/docs/api/overview",
+    fields: [
+      {
+        key: "accessToken",
+        label: "Private App Access Token",
+        type: "secret",
+        placeholder: "pat-...",
+        help: "HubSpot Private App with crm.objects.deals.read + crm.objects.line_items.read scopes",
+      },
+    ],
+  },
+  {
     id: "anthropic",
     name: "Anthropic API",
     category: "ai",
@@ -93,6 +110,7 @@ export const categoryLabels: Record<IntegrationCategory, string> = {
   psa: "Professional Services Automation",
   payroll: "Payroll",
   spend: "Spend Management",
+  crm: "CRM",
   ai: "AI",
 };
 

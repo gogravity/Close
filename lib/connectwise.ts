@@ -113,6 +113,7 @@ export type CwInvoice = {
   salesTax?: number;
   balance?: number;
   company?: { id: number; identifier: string; name: string };
+  agreement?: { id: number; name: string };
 };
 
 /**
@@ -127,7 +128,7 @@ export async function listInvoices(
   const cond = `date >= [${startDate}T00:00:00Z] and date <= [${endDate}T23:59:59Z]`;
   const pageSize = 1000;
   const fields =
-    "id,invoiceNumber,date,dueDate,status,type,subtotal,total,salesTax,balance,company";
+    "id,invoiceNumber,date,dueDate,status,type,subtotal,total,salesTax,balance,company,agreement";
   const out: CwInvoice[] = [];
   let page = 1;
   while (true) {
@@ -407,6 +408,90 @@ export async function listOpenProjectTickets(): Promise<
       if (typeof r.id === "number") {
         out.push({ id: r.id, projectId: r.project?.id ?? null });
       }
+    }
+    if (rows.length < pageSize) break;
+    page += 1;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// MRR Bridge support — agreement additions, procurement catalog, companies
+// ---------------------------------------------------------------------------
+
+export type CwAgreementAddition = {
+  id: number;
+  quantity: number;
+  unitPrice: number;
+  billCustomer?: string; // "Billable" | "DoNotBill" | etc.
+  effectiveDate?: string;
+  cancelledDate?: string | null;
+  product?: { identifier?: string; name?: string };
+};
+
+/**
+ * All billable additions on an agreement. Filter active ones by date window
+ * in the caller — CW returns every addition regardless of status, so we
+ * slice them to a snapshot on a given date in the bridge code.
+ */
+export async function listAgreementAdditions(
+  agreementId: number
+): Promise<CwAgreementAddition[]> {
+  const pageSize = 250;
+  const out: CwAgreementAddition[] = [];
+  let page = 1;
+  while (true) {
+    const rows = await cwGet<CwAgreementAddition[]>(
+      `/finance/agreements/${agreementId}/additions?pageSize=${pageSize}&page=${page}`
+    );
+    out.push(...rows);
+    if (rows.length < pageSize) break;
+    page += 1;
+  }
+  return out;
+}
+
+export type CwCatalogItem = {
+  identifier: string;
+  subcategory?: { id?: number; name?: string };
+};
+
+/**
+ * Product catalog with subcategory info for classifying line-item changes.
+ * Cloud subcategories ("365 Monthly", "Azure", etc.) are treated as usage /
+ * upsell rather than price increases in the MRR bridge logic.
+ */
+export async function listProcurementCatalog(): Promise<CwCatalogItem[]> {
+  const pageSize = 1000;
+  const out: CwCatalogItem[] = [];
+  let page = 1;
+  while (true) {
+    const rows = await cwGet<CwCatalogItem[]>(
+      `/procurement/catalog?pageSize=${pageSize}&page=${page}&fields=identifier,subcategory`
+    );
+    out.push(...rows);
+    if (rows.length < pageSize) break;
+    page += 1;
+  }
+  return out;
+}
+
+/**
+ * All CW company names. Used as a historical-customer source so a newly
+ * billing customer who already exists in CW doesn't get miscategorized as
+ * net-new revenue in the MRR bridge.
+ */
+export async function listAllCompanyNames(): Promise<string[]> {
+  const pageSize = 1000;
+  const out: string[] = [];
+  let page = 1;
+  while (true) {
+    const rows = await cwGet<Array<{ name?: string }>>(
+      `/company/companies?pageSize=${pageSize}&page=${page}&fields=name`
+    );
+    for (const r of rows) {
+      const name = (r.name ?? "").trim();
+      if (name) out.push(name);
     }
     if (rows.length < pageSize) break;
     page += 1;

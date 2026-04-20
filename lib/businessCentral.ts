@@ -390,6 +390,48 @@ export async function listOpenIntercompanyApInvoices(): Promise<BcPurchaseInvoic
   );
 }
 
+export type BcSalesCreditMemo = {
+  id: string;
+  number: string;
+  invoiceDate?: string;
+  postingDate?: string;
+  customerId?: string;
+  customerNumber?: string;
+  customerName?: string;
+  totalAmountIncludingTax?: number;
+  // When the AP user posted the credit against a specific invoice, BC populates
+  // these. Empty invoiceNumber + zero-GUID invoiceId → standalone credit with
+  // no target invoice (roughly 65% of credit memos in this tenant).
+  invoiceId?: string;
+  invoiceNumber?: string;
+};
+
+/**
+ * Posted sales credit memos with posting date in [startDate, endDate].
+ * SCM-* document numbers in GL entries resolve back to a customer via this.
+ */
+export async function listSalesCreditMemos(
+  startDate: string,
+  endDate: string
+): Promise<BcSalesCreditMemo[]> {
+  const companyId = await getSelectedCompanyId();
+  const filter = `postingDate ge ${startDate} and postingDate le ${endDate}`;
+  const path =
+    `/companies(${companyId})/salesCreditMemos?` +
+    `$filter=${encodeURIComponent(filter)}&` +
+    `$select=id,number,postingDate,customerId,customerNumber,customerName,totalAmountIncludingTax,invoiceId,invoiceNumber`;
+  const out: BcSalesCreditMemo[] = [];
+  let next: string | null = path;
+  while (next) {
+    const page: BcPage<BcSalesCreditMemo> = next.startsWith("http")
+      ? await bcGetAbsolute<BcPage<BcSalesCreditMemo>>(next)
+      : await bcGet<BcPage<BcSalesCreditMemo>>(next);
+    out.push(...page.value);
+    next = page["@odata.nextLink"] ?? null;
+  }
+  return out;
+}
+
 export async function getAgedPayables(): Promise<AgedPayables> {
   const companyId = await getSelectedCompanyId();
   const res = await bcGet<{ value: BcAgedPayableRow[] }>(

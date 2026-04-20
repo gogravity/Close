@@ -4,6 +4,7 @@ import { sections } from "@/lib/recon";
 import { getEntityConfig, getAccountMappings } from "@/lib/settings";
 import { listAccounts, BusinessCentralError } from "@/lib/businessCentral";
 import SidebarNav, { type SidebarSection } from "./SidebarNav";
+import DataPrepNav from "./DataPrepNav";
 
 export default async function Sidebar() {
   const { name, periodEnd } = await getEntityConfig();
@@ -76,33 +77,26 @@ export default async function Sidebar() {
         >
           Balance Sheet Summary
         </Link>
-        <div className="mt-4 px-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-          Data Preparation
-        </div>
-        <ul className="mt-1 space-y-0.5">
-          <li>
-            <Link
-              href="/data-prep/invoice-validation"
-              className="block rounded px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-200 hover:text-slate-900"
-            >
-              Invoice Validation
-            </Link>
-          </li>
-          <li>
-            <Link
-              href="/data-prep/pl-comparison"
-              className="block rounded px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-200 hover:text-slate-900"
-            >
-              P&amp;L Comparison
-            </Link>
-          </li>
-        </ul>
+        <DataPrepNav />
         <div className="mt-4 px-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
           Balance Sheet Reconciliation
         </div>
         <Suspense fallback={<ul className="mt-1 space-y-0.5" />}>
           <SidebarNav sections={navSections} />
         </Suspense>
+        <div className="mt-4 px-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+          MRR Bridge
+        </div>
+        <ul className="mt-1 space-y-0.5">
+          <li>
+            <Link
+              href="/mrr-bridge"
+              className="block rounded px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-200 hover:text-slate-900"
+            >
+              Monthly Bridge
+            </Link>
+          </li>
+        </ul>
         <div className="mt-4 space-y-0.5 border-t border-slate-200 pt-3">
           <Link
             href="/export"

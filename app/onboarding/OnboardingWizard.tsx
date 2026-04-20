@@ -6,7 +6,15 @@ import type { SettingsSnapshot } from "@/lib/settings";
 
 type Props = { initial: SettingsSnapshot };
 
-const STEPS = ["business-central", "connectwise"] as const;
+const REQUIRED_STEPS = ["business-central", "connectwise"] as const;
+const OPTIONAL_STEPS = ["ramp", "gusto", "anthropic"] as const;
+const ALL_STEPS = [...REQUIRED_STEPS, ...OPTIONAL_STEPS] as const;
+
+type StepId = (typeof ALL_STEPS)[number];
+
+function isOptional(id: StepId): boolean {
+  return (OPTIONAL_STEPS as readonly string[]).includes(id);
+}
 
 export default function OnboardingWizard({ initial }: Props) {
   const router = useRouter();
@@ -19,8 +27,10 @@ export default function OnboardingWizard({ initial }: Props) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const currentId = STEPS[stepIdx];
+  const currentId = ALL_STEPS[stepIdx];
   const current = snapshot.integrations.find((i) => i.id === currentId)!;
+  const optional = isOptional(currentId);
+  const isLastStep = stepIdx === ALL_STEPS.length - 1;
 
   function setField(key: string, value: string) {
     setValues((prev) => ({
@@ -29,11 +39,31 @@ export default function OnboardingWizard({ initial }: Props) {
     }));
   }
 
+  function advance() {
+    if (isLastStep) {
+      router.push("/");
+      router.refresh();
+    } else {
+      setStepIdx(stepIdx + 1);
+      setValues({});
+      setError(null);
+    }
+  }
+
   async function saveAndAdvance() {
+    const pending = values[currentId] ?? {};
+    const hasInput = Object.values(pending).some((v) => v.trim() !== "");
+
+    // Optional step with no input → skip without saving
+    if (optional && !hasInput) {
+      advance();
+      return;
+    }
+
     setSaving(true);
     setError(null);
     try {
-      const body = { integrations: { [currentId]: values[currentId] ?? {} } };
+      const body = { integrations: { [currentId]: pending } };
       const res = await fetch("/api/settings", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -43,17 +73,11 @@ export default function OnboardingWizard({ initial }: Props) {
       const updated: SettingsSnapshot = await res.json();
       setSnapshot(updated);
       const justSaved = updated.integrations.find((i) => i.id === currentId)!;
-      if (!justSaved.configured) {
+      if (!optional && !justSaved.configured) {
         setError("All fields are required to continue.");
         return;
       }
-      if (stepIdx < STEPS.length - 1) {
-        setStepIdx(stepIdx + 1);
-        setValues({});
-      } else {
-        router.push("/");
-        router.refresh();
-      }
+      advance();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -64,36 +88,72 @@ export default function OnboardingWizard({ initial }: Props) {
   const filled = current.fields.every(
     (f) => Boolean(values[currentId]?.[f.key]) || f.isSet
   );
+  const canSave = optional ? true : filled;
 
   return (
     <div>
-      <ol className="mb-8 flex gap-2">
-        {STEPS.map((id, i) => {
-          const integ = snapshot.integrations.find((x) => x.id === id)!;
-          const done = integ.configured;
-          const active = i === stepIdx;
-          return (
-            <li
-              key={id}
-              className={`flex-1 rounded border px-3 py-2 text-xs ${
-                done
-                  ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-                  : active
-                  ? "border-slate-900 bg-slate-900 text-white"
-                  : "border-slate-200 bg-white text-slate-500"
-              }`}
-            >
-              <div className="font-semibold uppercase tracking-wide">
-                Step {i + 1}
-              </div>
-              <div className="mt-0.5">{integ.name}</div>
-              <div className="mt-0.5 opacity-80">
-                {done ? "Connected" : active ? "In progress" : "Pending"}
-              </div>
-            </li>
-          );
-        })}
-      </ol>
+      {/* Step indicator */}
+      <div className="mb-8 space-y-2">
+        {/* Required steps */}
+        <ol className="flex gap-2">
+          {REQUIRED_STEPS.map((id, i) => {
+            const integ = snapshot.integrations.find((x) => x.id === id)!;
+            const done = integ.configured;
+            const active = i === stepIdx;
+            return (
+              <li
+                key={id}
+                className={`flex-1 rounded border px-3 py-2 text-xs ${
+                  done
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                    : active
+                    ? "border-slate-900 bg-slate-900 text-white"
+                    : "border-slate-200 bg-white text-slate-500"
+                }`}
+              >
+                <div className="font-semibold uppercase tracking-wide">Step {i + 1}</div>
+                <div className="mt-0.5">{integ.name}</div>
+                <div className="mt-0.5 opacity-80">
+                  {done ? "Connected" : active ? "In progress" : "Pending"}
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+
+        {/* Optional steps */}
+        <ol className="flex gap-2">
+          {OPTIONAL_STEPS.map((id, i) => {
+            const integ = snapshot.integrations.find((x) => x.id === id)!;
+            const done = integ.configured;
+            const active = id === currentId;
+            const globalIdx = REQUIRED_STEPS.length + i;
+            return (
+              <li
+                key={id}
+                className={`flex-1 rounded border px-3 py-2 text-xs ${
+                  done
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                    : active
+                    ? "border-slate-900 bg-slate-900 text-white"
+                    : "border-slate-200 bg-white text-slate-400"
+                }`}
+              >
+                <div className="font-semibold uppercase tracking-wide">
+                  Step {globalIdx + 1}{" "}
+                  <span className={`font-normal normal-case tracking-normal ${active ? "text-slate-300" : "text-slate-400"}`}>
+                    · optional
+                  </span>
+                </div>
+                <div className="mt-0.5">{integ.name}</div>
+                <div className="mt-0.5 opacity-70">
+                  {done ? "Connected" : active ? "In progress" : "Skip or connect"}
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+      </div>
 
       {currentId === "connectwise" && (
         <div className="mb-4 rounded border border-amber-200 bg-amber-50 px-4 py-3">
@@ -115,18 +175,27 @@ export default function OnboardingWizard({ initial }: Props) {
 
       <div className="rounded border border-slate-200 bg-white">
         <header className="border-b border-slate-200 px-6 py-4">
-          <h2 className="text-lg font-semibold text-slate-900">{current.name}</h2>
-          <p className="mt-1 text-sm text-slate-600">{current.blurb}</p>
-          {current.docsUrl && (
-            <a
-              href={current.docsUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="mt-2 inline-block text-xs text-blue-600 hover:underline"
-            >
-              API documentation ↗
-            </a>
-          )}
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">{current.name}</h2>
+              <p className="mt-1 text-sm text-slate-600">{current.blurb}</p>
+              {current.docsUrl && (
+                <a
+                  href={current.docsUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-2 inline-block text-xs text-blue-600 hover:underline"
+                >
+                  API documentation ↗
+                </a>
+              )}
+            </div>
+            {optional && (
+              <span className="shrink-0 rounded border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-500">
+                Optional
+              </span>
+            )}
+          </div>
         </header>
         <div className="grid grid-cols-2 gap-4 px-6 py-5">
           {current.fields.map((f) => {
@@ -155,6 +224,8 @@ export default function OnboardingWizard({ initial }: Props) {
           <div className="text-xs text-slate-500">
             {error ? (
               <span className="text-red-600">{error}</span>
+            ) : optional ? (
+              <>You can skip this and connect it later from Settings.</>
             ) : (
               <>Credentials are encrypted at rest. Your data never leaves this host.</>
             )}
@@ -163,32 +234,36 @@ export default function OnboardingWizard({ initial }: Props) {
             {stepIdx > 0 && (
               <button
                 type="button"
-                onClick={() => setStepIdx(stepIdx - 1)}
+                onClick={() => { setStepIdx(stepIdx - 1); setError(null); }}
                 className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
               >
                 Back
               </button>
             )}
+            {optional && (
+              <button
+                type="button"
+                onClick={advance}
+                className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50"
+              >
+                {isLastStep ? "Skip & Finish" : "Skip"}
+              </button>
+            )}
             <button
               type="button"
-              disabled={saving || !filled}
+              disabled={saving || !canSave}
               onClick={saveAndAdvance}
               className="rounded bg-slate-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
             >
               {saving
                 ? "Saving…"
-                : stepIdx < STEPS.length - 1
-                ? "Save & Continue"
-                : "Finish"}
+                : isLastStep
+                ? "Save & Finish"
+                : "Save & Continue"}
             </button>
           </div>
         </footer>
       </div>
-
-      <p className="mt-6 text-xs text-slate-500">
-        Other integrations (Ramp, Gusto, Anthropic) can be added later from Settings. The
-        company name for this close is pulled from Business Central after you connect.
-      </p>
     </div>
   );
 }

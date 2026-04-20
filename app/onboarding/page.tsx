@@ -18,7 +18,7 @@ export default async function OnboardingPage() {
         </h1>
         <p className="mt-2 text-sm text-slate-600">
           Balance-sheet reconciliation starts from your general ledger and your PSA. Connect
-          both to continue.
+          both to continue, then optionally add Ramp, Gusto, and Anthropic.
         </p>
       </header>
       <OnboardingWizard initial={snapshot} />

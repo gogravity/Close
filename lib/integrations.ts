@@ -57,9 +57,25 @@ export const integrations: Integration[] = [
     blurb: "Corporate cards + bill pay. Feeds credit card reconciliations and AP activity.",
     docsUrl: "https://docs.ramp.com/developer-api/v1/overview/introduction",
     fields: [
-      { key: "clientId", label: "Client ID", type: "secret" },
-      { key: "clientSecret", label: "Client Secret", type: "secret" },
-      { key: "environment", label: "Environment", type: "text", placeholder: "production or demo" },
+      {
+        key: "clientId",
+        label: "Client ID",
+        type: "secret",
+        help: "Create an OAuth app at developers.ramp.com → Developer → OAuth. Required scopes: transactions:read receipts:read statements:read",
+      },
+      {
+        key: "clientSecret",
+        label: "Client Secret",
+        type: "secret",
+        help: "Generated alongside the Client ID in the Ramp Developer Portal.",
+      },
+      {
+        key: "environment",
+        label: "Environment",
+        type: "text",
+        placeholder: "production",
+        help: "Use \"production\" for api.ramp.com (live cards) or \"demo\" for demo-api.ramp.com (Ramp sandbox).",
+      },
     ],
   },
   {
@@ -96,11 +112,23 @@ export const integrations: Integration[] = [
     name: "Anthropic API",
     category: "ai",
     blurb:
-      "Used for AI-assisted reconciliation explanations, anomaly detection, and journal-entry drafting.",
-    docsUrl: "https://docs.claude.com/en/api/overview",
+      "Claude API. Currently used for bank statement PDF parsing in the Cash reconciliation section — extracts ending balance, outstanding checks, and deposits in transit.",
+    docsUrl: "https://docs.anthropic.com/en/api/getting-started",
     fields: [
-      { key: "apiKey", label: "API Key", type: "secret", placeholder: "sk-ant-..." },
-      { key: "model", label: "Default Model", type: "text", placeholder: "claude-sonnet-4-6" },
+      {
+        key: "apiKey",
+        label: "API Key",
+        type: "secret",
+        placeholder: "sk-ant-...",
+        help: "Create at console.anthropic.com → API Keys. The key is only shown once — copy it immediately.",
+      },
+      {
+        key: "model",
+        label: "Model",
+        type: "text",
+        placeholder: "claude-sonnet-4-6",
+        help: "Defaults to claude-sonnet-4-6 if left blank. See docs.anthropic.com/en/docs/about-claude/models for available model IDs.",
+      },
     ],
   },
 ];

@@ -9,6 +9,15 @@ let cachedKey: Buffer | null = null;
 
 async function loadOrCreateMasterKey(): Promise<Buffer> {
   if (cachedKey) return cachedKey;
+
+  // Prefer the env var — keeps the key off disk in production (Azure Container
+  // App secret). Falls back to the key file for local development.
+  const envKey = process.env.MASTER_KEY?.trim();
+  if (envKey && envKey.length === 64) {
+    cachedKey = Buffer.from(envKey, "hex");
+    return cachedKey;
+  }
+
   try {
     const hex = (await readFile(KEY_FILE, "utf8")).trim();
     if (hex.length === 64) {

@@ -367,7 +367,7 @@ export default function MrrBridgeClient({ defaultPriorMonth, defaultCurrentMonth
         <div className="rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
           <div className="font-medium">Bridge failed</div>
           <div className="mt-1 font-mono text-xs">{err.error}</div>
-          {err.body && (
+          {Boolean(err.body) && (
             <pre className="mt-2 max-h-64 overflow-auto rounded bg-white p-2 text-[11px]">
               {JSON.stringify(err.body, null, 2)}
             </pre>

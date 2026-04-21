@@ -750,7 +750,7 @@ export async function computeMrrBridge(input: MrrBridgeInput): Promise<MrrBridge
   }
 
   // 12-month lookback: flip provisional new_client → upsell if customer existed.
-  const provisionalNewClients = lines.filter((l) => l.category === "new_client" && l.category !== "one_time_adj");
+  const provisionalNewClients = lines.filter((l) => l.category === "new_client");
   if (provisionalNewClients.length > 0) {
     const lookbackStart = shiftDate(priorStart, -365);
     const lookbackEnd = shiftDate(priorStart, -1);

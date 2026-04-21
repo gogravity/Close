@@ -774,19 +774,21 @@ export async function listOpenCustomerLedgerEntries(): Promise<BcCustomerLedgerE
     next = page["@odata.nextLink"] ?? null;
   }
 
-  // --- Open credit memos (no status filter available; fetch last 3 years and
-  //     keep those with a remaining amount, i.e. not fully applied) ---
+  // --- Credit memos (last 3 years) ---
+  // salesCreditMemo does not expose remainingAmount or an 'open' status, so
+  // we fetch all recent ones and include them — callers see documentType
+  // "Credit Memo" and can treat them as informational AR offsets.
   const threeYearsAgo = `${new Date().getUTCFullYear() - 3}-01-01`;
   const cmFilter = `postingDate ge ${threeYearsAgo}`;
   const cmPath =
     `/companies(${companyId})/salesCreditMemos?` +
     `$filter=${encodeURIComponent(cmFilter)}&` +
-    `$select=id,number,externalDocumentNumber,postingDate,customerId,customerNumber,customerName,totalAmountIncludingTax,remainingAmount&` +
+    `$select=id,number,externalDocumentNumber,postingDate,customerNumber,customerName,totalAmountIncludingTax&` +
     `$orderby=postingDate`;
-  const creditMemos: (BcSalesCreditMemo & { externalDocumentNumber?: string; postingDate?: string; remainingAmount?: number })[] = [];
+  const creditMemos: (BcSalesCreditMemo & { externalDocumentNumber?: string; postingDate?: string })[] = [];
   let cmNext: string | null = cmPath;
   while (cmNext) {
-    const page: BcPage<BcSalesCreditMemo & { externalDocumentNumber?: string; postingDate?: string; remainingAmount?: number }> =
+    const page: BcPage<BcSalesCreditMemo & { externalDocumentNumber?: string; postingDate?: string }> =
       cmNext.startsWith("http")
         ? await bcGetAbsolute(cmNext)
         : await bcGet(cmNext);
@@ -815,8 +817,6 @@ export async function listOpenCustomerLedgerEntries(): Promise<BcCustomerLedgerE
   }
 
   for (const cm of creditMemos) {
-    const remaining = cm.remainingAmount ?? 0;
-    if (remaining === 0) continue; // fully applied — skip
     out.push({
       id: cm.id,
       entryNumber: 0,
@@ -828,7 +828,7 @@ export async function listOpenCustomerLedgerEntries(): Promise<BcCustomerLedgerE
       customerName: cm.customerName ?? "",
       description: "",
       amount: -(cm.totalAmountIncludingTax ?? 0),
-      remainingAmount: remaining,
+      remainingAmount: -(cm.totalAmountIncludingTax ?? 0),
       open: true,
       dueDate: undefined,
     });

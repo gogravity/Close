@@ -712,7 +712,11 @@ export async function computeMrrBridge(input: MrrBridgeInput): Promise<MrrBridge
     // Initial classification — refined below after customer totals and
     // product-level breakdown are available.
     let category: BridgeLineCategory = "flat";
-    if (priorVal === 0 && currentVal > 0) category = "new_client";
+    if (agreement === "Credit Memo Adjustment") {
+      // Credit memos are one-off adjustments by definition — default to
+      // one_time_adj so they don't inflate churn/downsell stats.
+      category = "one_time_adj";
+    } else if (priorVal === 0 && currentVal > 0) category = "new_client";
     else if (change > 0) category = "upsell";
     else if (change < 0) category = "downsell";
 
@@ -733,6 +737,7 @@ export async function computeMrrBridge(input: MrrBridgeInput): Promise<MrrBridge
   }
 
   for (const line of lines) {
+    if (line.category === "one_time_adj") continue; // don't override manual defaults
     const priorCust = priorByCompany.get(line.company) ?? 0;
     const currentCust = currentByCompany.get(line.company) ?? 0;
     if (line.priorMrr > 0 && line.currentMrr === 0) {
@@ -745,7 +750,7 @@ export async function computeMrrBridge(input: MrrBridgeInput): Promise<MrrBridge
   }
 
   // 12-month lookback: flip provisional new_client → upsell if customer existed.
-  const provisionalNewClients = lines.filter((l) => l.category === "new_client");
+  const provisionalNewClients = lines.filter((l) => l.category === "new_client" && l.category !== "one_time_adj");
   if (provisionalNewClients.length > 0) {
     const lookbackStart = shiftDate(priorStart, -365);
     const lookbackEnd = shiftDate(priorStart, -1);

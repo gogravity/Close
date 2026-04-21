@@ -440,14 +440,19 @@ function BridgeReport({
             {BRIDGE_ORDER.map((cat) => {
               const val = summary.byCategory[cat];
               const meta = CATEGORY_META[cat];
-              if (val === 0) return null;
+              const isEmpty = val === 0;
               return (
                 <tr key={cat} className="border-t border-slate-100">
-                  <td className="px-4 py-1 text-slate-700 pl-8">{meta.label}</td>
+                  <td className={`px-4 py-1 pl-8 ${isEmpty ? "text-slate-400" : "text-slate-700"}`}>
+                    {meta.label}
+                  </td>
                   <td className={`px-4 py-1 text-right tabular-nums ${
-                    meta.sign === "positive" ? "text-emerald-700" : meta.sign === "negative" ? "text-red-700" : val >= 0 ? "text-emerald-700" : "text-red-700"
+                    isEmpty ? "text-slate-300" :
+                    meta.sign === "positive" ? "text-emerald-700" :
+                    meta.sign === "negative" ? "text-red-700" :
+                    val >= 0 ? "text-emerald-700" : "text-red-700"
                   }`}>
-                    {fmt(val)}
+                    {isEmpty ? "–" : fmt(val)}
                   </td>
                 </tr>
               );

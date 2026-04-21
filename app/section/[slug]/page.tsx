@@ -2,7 +2,10 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { sections, fmt } from "@/lib/recon";
 import { getEntityConfig } from "@/lib/settings";
+import { loadSyncMeta } from "@/lib/balances";
 import { computeSection, type Tier } from "@/lib/sections";
+import { loadConfirmedJes } from "@/lib/confirmedJes";
+import JeConfirmButton from "@/components/JeConfirmButton";
 
 export const dynamic = "force-dynamic";
 
@@ -42,8 +45,15 @@ export default async function SectionPage({
   const entity = await getEntityConfig();
   if (!entity.bcConfigured || !entity.cwConfigured) redirect("/onboarding");
 
-  const data = await computeSection(slug);
+  const [data, syncMeta] = await Promise.all([
+    computeSection(slug),
+    loadSyncMeta(),
+  ]);
   if (!data) notFound();
+
+  const period = (syncMeta?.asOf ?? entity.periodEnd ?? "").slice(0, 7); // YYYY-MM
+  const confirmedJes = await loadConfirmedJes(period);
+  const confirmedJe = confirmedJes.get(slug) ?? null;
 
   const { section, tier, sourceLabel, unadjusted, expected, adjustment, accounts, journalEntry, rolledForwardFrom, notes } =
     data;
@@ -90,11 +100,7 @@ export default async function SectionPage({
         </h2>
         {accounts.length === 0 ? (
           <div className="rounded border border-dashed border-slate-300 px-4 py-6 text-sm text-slate-500">
-            No BC accounts mapped to this section yet. Go to{" "}
-            <Link className="text-blue-600 hover:underline" href="/mapping">
-              Account Mapping
-            </Link>{" "}
-            to assign.
+            No BC accounts mapped to this section yet.
           </div>
         ) : (
           <div className="overflow-hidden rounded border border-slate-200">
@@ -141,50 +147,62 @@ export default async function SectionPage({
           )}
         </div>
         {journalEntry ? (
-          <div className="overflow-hidden rounded border border-slate-200">
-            <div className="border-b border-slate-200 bg-slate-50 px-4 py-2 text-sm">
-              <div className="text-xs uppercase tracking-wide text-slate-500">Memo</div>
-              <div className="mt-0.5 text-slate-900">{journalEntry.memo}</div>
-              {journalEntry.reverseFlag && (
-                <div className="mt-1 text-xs text-slate-500">
-                  Reverse: {journalEntry.reverseFlag}
+          <>
+            <div className="overflow-hidden rounded border border-slate-200">
+              <div className="border-b border-slate-200 bg-slate-50 px-4 py-2 text-sm">
+                <div className="text-xs uppercase tracking-wide text-slate-500">Memo</div>
+                <div className="mt-0.5 text-slate-900">{journalEntry.memo}</div>
+                {journalEntry.reverseFlag && (
+                  <div className="mt-1 text-xs text-slate-500">
+                    Reverse: {journalEntry.reverseFlag}
+                  </div>
+                )}
+              </div>
+              <table className="w-full text-sm">
+                <thead className="bg-white text-slate-600">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-medium">Account</th>
+                    <th className="px-3 py-2 text-right font-medium w-[130px]">Debit</th>
+                    <th className="px-3 py-2 text-right font-medium w-[130px]">Credit</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {journalEntry.lines.map((l, i) => (
+                    <tr key={i} className="border-t border-slate-100">
+                      <td className="px-3 py-1.5">{l.account}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums">
+                        {l.debit === 0 ? "" : fmt(l.debit)}
+                      </td>
+                      <td className="px-3 py-1.5 text-right tabular-nums">
+                        {l.credit === 0 ? "" : fmt(l.credit)}
+                      </td>
+                    </tr>
+                  ))}
+                  <tr className="border-t border-slate-300 bg-slate-50 font-semibold">
+                    <td className="px-3 py-1.5">Totals</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums">{fmt(debitTotal)}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums">{fmt(creditTotal)}</td>
+                  </tr>
+                </tbody>
+              </table>
+              {Math.abs(debitTotal - creditTotal) >= 0.01 && (
+                <div className="border-t border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+                  JE does not balance — Dr ({fmt(debitTotal)}) ≠ Cr ({fmt(creditTotal)}). Review
+                  the template entries for this section.
                 </div>
               )}
             </div>
-            <table className="w-full text-sm">
-              <thead className="bg-white text-slate-600">
-                <tr>
-                  <th className="px-3 py-2 text-left font-medium">Account</th>
-                  <th className="px-3 py-2 text-right font-medium w-[130px]">Debit</th>
-                  <th className="px-3 py-2 text-right font-medium w-[130px]">Credit</th>
-                </tr>
-              </thead>
-              <tbody>
-                {journalEntry.lines.map((l, i) => (
-                  <tr key={i} className="border-t border-slate-100">
-                    <td className="px-3 py-1.5">{l.account}</td>
-                    <td className="px-3 py-1.5 text-right tabular-nums">
-                      {l.debit === 0 ? "" : fmt(l.debit)}
-                    </td>
-                    <td className="px-3 py-1.5 text-right tabular-nums">
-                      {l.credit === 0 ? "" : fmt(l.credit)}
-                    </td>
-                  </tr>
-                ))}
-                <tr className="border-t border-slate-300 bg-slate-50 font-semibold">
-                  <td className="px-3 py-1.5">Totals</td>
-                  <td className="px-3 py-1.5 text-right tabular-nums">{fmt(debitTotal)}</td>
-                  <td className="px-3 py-1.5 text-right tabular-nums">{fmt(creditTotal)}</td>
-                </tr>
-              </tbody>
-            </table>
-            {Math.abs(debitTotal - creditTotal) >= 0.01 && (
-              <div className="border-t border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
-                JE does not balance — Dr ({fmt(debitTotal)}) ≠ Cr ({fmt(creditTotal)}). Review
-                the template entries for this section.
-              </div>
-            )}
-          </div>
+
+            {/* Confirm button — persists this JE to confirmed-jes.json and flows to dashboard */}
+            <JeConfirmButton
+              sectionSlug={slug}
+              period={period}
+              memo={journalEntry.memo}
+              lines={journalEntry.lines}
+              initialConfirmed={!!confirmedJe}
+              confirmedAt={confirmedJe?.confirmedAt}
+            />
+          </>
         ) : (
           <div className="rounded border border-dashed border-slate-300 px-4 py-6 text-sm text-slate-500">
             No adjusting journal entry needed for this period. Expected balance equals

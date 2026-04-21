@@ -13,11 +13,14 @@ export default async function Home() {
   const entity = await getEntityConfig();
   if (!entity.bcConfigured || !entity.cwConfigured) redirect("/onboarding");
 
-  const [balances, adjMap, syncMeta] = await Promise.all([
+  const [balances, syncMeta] = await Promise.all([
     loadBalances(),
-    loadAdjustmentsByAccount(),
     loadSyncMeta(),
   ]);
+
+  // Use the frozen snapshot period if available, otherwise fall back to entity setting
+  const period = (syncMeta?.asOf ?? entity.periodEnd ?? "").slice(0, 7); // YYYY-MM
+  const adjMap = await loadAdjustmentsByAccount(period);
 
   const toRow = (a: Account): RowData => ({
     name: a.name,
@@ -32,8 +35,7 @@ export default async function Home() {
   const liabilities = accounts.filter((a) => a.classification === "Liabilities").map(toRow);
   const equity = accounts.filter((a) => a.classification === "Equity").map(toRow);
 
-  // Compute per-section JE status: a section "has adjustment" if any of its
-  // mapped accounts has a non-zero adjustment entry.
+  // Verify status: a section "has adjustment" only if a JE has been explicitly confirmed
   const sectionStatuses: SectionStatus[] = sections.map((s) => {
     const hasAdjustment = s.accounts.some((name) => adjustmentFor(adjMap, name) !== 0);
     return {

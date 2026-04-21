@@ -8,6 +8,7 @@ import { accounts } from "@/lib/recon";
 export const dynamic = "force-dynamic";
 
 const BALANCES_FILE = path.join(process.cwd(), ".data", "balances.json");
+const META_FILE = path.join(process.cwd(), ".data", "sync-meta.json");
 
 /**
  * Payroll-section accounts are populated by the payroll process (sections 8–9)
@@ -128,8 +129,12 @@ export async function POST(request: Request) {
     // If no match at all, omit (falls to 0 in balanceOf)
   }
 
+  const syncedAt = new Date().toISOString();
   await mkdir(path.dirname(BALANCES_FILE), { recursive: true });
-  await writeFile(BALANCES_FILE, JSON.stringify(result, null, 2));
+  await Promise.all([
+    writeFile(BALANCES_FILE, JSON.stringify(result, null, 2)),
+    writeFile(META_FILE, JSON.stringify({ syncedAt, asOf }, null, 2)),
+  ]);
 
-  return NextResponse.json({ ok: true, asOf, synced: matched, total: accounts.length });
+  return NextResponse.json({ ok: true, asOf, syncedAt, synced: matched, total: accounts.length });
 }

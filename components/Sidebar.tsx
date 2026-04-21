@@ -76,14 +76,11 @@ export default async function Sidebar() {
       <nav className="flex-1 px-3 py-4 space-y-0.5">
         <DataPrepNav />
 
-        <div className="pt-5 pb-1 px-3 text-[9px] font-semibold uppercase tracking-widest text-slate-500">
-          Balance Sheet Summary
-        </div>
         <Link
           href="/"
-          className="block rounded px-3 py-1.5 text-sm text-slate-300 hover:bg-white/[0.06] hover:text-white transition-colors"
+          className="block rounded px-3 py-1.5 text-sm text-slate-300 hover:bg-white/[0.06] hover:text-white transition-colors mt-4"
         >
-          Dashboard
+          Balance Sheet Summary
         </Link>
 
         <div className="pt-5 pb-1 px-3 text-[9px] font-semibold uppercase tracking-widest text-slate-500">

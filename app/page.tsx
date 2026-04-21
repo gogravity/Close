@@ -4,6 +4,7 @@ import { accounts, sections, fmt, type Account } from "@/lib/recon";
 import { loadBalances, balanceOf } from "@/lib/balances";
 import { getEntityConfig } from "@/lib/settings";
 import MetricCard from "@/components/MetricCard";
+import MonthEndPicker from "@/components/MonthEndPicker";
 
 export const dynamic = "force-dynamic";
 
@@ -33,9 +34,7 @@ export default async function Home() {
         <h1 className="mt-1 text-2xl font-semibold text-slate-900">
           {entity.name || "Unconfigured entity"}
         </h1>
-        <div className="mt-0.5 text-sm text-slate-600">
-          Unadjusted trial balance — {entity.periodEnd || "no period set"}
-        </div>
+        <MonthEndPicker initialPeriod={entity.periodEnd} />
       </header>
 
       <div className="grid grid-cols-3 gap-3 mb-8">
@@ -94,7 +93,7 @@ function BsSection({ title, rows }: { title: string; rows: Row[] }) {
             <tr>
               <th className="px-4 py-2 text-left font-medium">Account</th>
               <th className="px-4 py-2 text-left font-medium">FS Mapping</th>
-              <th className="px-4 py-2 text-right font-medium">Balance</th>
+              <th className="px-4 py-2 text-right font-medium">Unadjusted Trial Balance</th>
             </tr>
           </thead>
           <tbody>

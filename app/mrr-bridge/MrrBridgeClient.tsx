@@ -176,7 +176,8 @@ type OkResponse = {
 type ErrResponse = { ok: false; error: string; status?: number; body?: unknown };
 
 type Props = {
-  defaultPeriods: { priorStart: string; priorEnd: string; currentStart: string; currentEnd: string };
+  defaultPriorMonth: string;    // YYYY-MM
+  defaultCurrentMonth: string;  // YYYY-MM
   hubspotConfigured: boolean;
 };
 
@@ -184,11 +185,18 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-export default function MrrBridgeClient({ defaultPeriods, hubspotConfigured }: Props) {
-  const [priorStart, setPriorStart] = useState(defaultPeriods.priorStart);
-  const [priorEnd, setPriorEnd] = useState(defaultPeriods.priorEnd);
-  const [currentStart, setCurrentStart] = useState(defaultPeriods.currentStart);
-  const [currentEnd, setCurrentEnd] = useState(defaultPeriods.currentEnd);
+/** Returns the first and last day of a YYYY-MM month as YYYY-MM-DD strings. */
+function monthBounds(month: string): { start: string; end: string } {
+  const [year, m] = month.split("-").map(Number);
+  const start = `${year}-${String(m).padStart(2, "0")}-01`;
+  const lastDay = new Date(Date.UTC(year, m, 0)).getUTCDate();
+  const end = `${year}-${String(m).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+  return { start, end };
+}
+
+export default function MrrBridgeClient({ defaultPriorMonth, defaultCurrentMonth, hubspotConfigured }: Props) {
+  const [priorMonth, setPriorMonth] = useState(defaultPriorMonth);
+  const [currentMonth, setCurrentMonth] = useState(defaultCurrentMonth);
   const [priorSigned, setPriorSigned] = useState(0);
   const [skipHubspot, setSkipHubspot] = useState(!hubspotConfigured);
   const [loading, setLoading] = useState(false);
@@ -204,10 +212,16 @@ export default function MrrBridgeClient({ defaultPeriods, hubspotConfigured }: P
     setLoading(true);
     setErr(null);
     try {
+      const prior = monthBounds(priorMonth);
+      const current = monthBounds(currentMonth);
       const res = await fetch("/api/mrr-bridge", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ priorStart, priorEnd, currentStart, currentEnd, priorSignedNotOnboarded: priorSigned, skipHubspot }),
+        body: JSON.stringify({
+          priorStart: prior.start, priorEnd: prior.end,
+          currentStart: current.start, currentEnd: current.end,
+          priorSignedNotOnboarded: priorSigned, skipHubspot,
+        }),
       });
       const json = (await res.json()) as OkResponse | ErrResponse;
       if (!json.ok) {
@@ -286,10 +300,8 @@ export default function MrrBridgeClient({ defaultPeriods, hubspotConfigured }: P
     <div className="space-y-5">
       {/* Controls */}
       <div className="flex flex-wrap items-end gap-4 rounded border border-slate-200 bg-white px-4 py-3">
-        <Period label="Prior start" value={priorStart} onChange={setPriorStart} />
-        <Period label="Prior end" value={priorEnd} onChange={setPriorEnd} />
-        <Period label="Current start" value={currentStart} onChange={setCurrentStart} />
-        <Period label="Current end" value={currentEnd} onChange={setCurrentEnd} />
+        <MonthPicker label="Prior Month" value={priorMonth} onChange={setPriorMonth} />
+        <MonthPicker label="Current Month" value={currentMonth} onChange={setCurrentMonth} />
         <label className="text-sm">
           <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Prior signed / not onboarded</div>
           <input
@@ -379,12 +391,12 @@ function signDot(sign: "positive" | "negative" | "neutral"): string {
   return sign === "positive" ? "bg-emerald-500" : sign === "negative" ? "bg-red-400" : "bg-slate-400";
 }
 
-function Period({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+function MonthPicker({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
   return (
     <label className="text-sm">
       <div className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</div>
       <input
-        type="date" value={value} onChange={(e) => onChange(e.target.value)}
+        type="month" value={value} onChange={(e) => onChange(e.target.value)}
         className="mt-1 rounded border border-slate-300 px-2 py-1 font-mono text-sm"
       />
     </label>

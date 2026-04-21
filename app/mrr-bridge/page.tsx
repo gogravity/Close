@@ -3,36 +3,22 @@ import MrrBridgeClient from "./MrrBridgeClient";
 
 export const dynamic = "force-dynamic";
 
-function defaultPeriods(periodEnd: string): {
-  priorStart: string;
-  priorEnd: string;
-  currentStart: string;
-  currentEnd: string;
-} {
-  // periodEnd is YYYY-MM-DD (last day of current close period). The default
-  // bridge compares the prior calendar month to the month ending on periodEnd.
+function defaultMonths(periodEnd: string): { priorMonth: string; currentMonth: string } {
   let cy: number;
   let cm: number; // 1-12
   if (/^\d{4}-\d{2}-\d{2}$/.test(periodEnd)) {
     const [y, m] = periodEnd.split("-").map(Number);
-    cy = y;
-    cm = m;
+    cy = y; cm = m;
   } else {
     const now = new Date();
     cy = now.getUTCFullYear();
     cm = now.getUTCMonth() + 1;
   }
-  const currentStart = new Date(Date.UTC(cy, cm - 1, 1));
-  const currentEnd = new Date(Date.UTC(cy, cm, 0));
-  const priorStart = new Date(Date.UTC(cy, cm - 2, 1));
-  const priorEnd = new Date(Date.UTC(cy, cm - 1, 0));
-  const fmt = (d: Date) => d.toISOString().slice(0, 10);
-  return {
-    priorStart: fmt(priorStart),
-    priorEnd: fmt(priorEnd),
-    currentStart: fmt(currentStart),
-    currentEnd: fmt(currentEnd),
-  };
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const currentMonth = `${cy}-${pad(cm)}`;
+  const priorDate = new Date(Date.UTC(cy, cm - 2, 1));
+  const priorMonth = `${priorDate.getUTCFullYear()}-${pad(priorDate.getUTCMonth() + 1)}`;
+  return { priorMonth, currentMonth };
 }
 
 export default async function MrrBridgePage() {
@@ -41,7 +27,7 @@ export default async function MrrBridgePage() {
   const hubspotConfigured = Boolean(
     snapshot.integrations.find((i) => i.id === "hubspot")?.configured
   );
-  const periods = defaultPeriods(entity.periodEnd);
+  const periods = defaultMonths(entity.periodEnd);
 
   return (
     <div className="px-8 py-8 max-w-[1500px]">
@@ -62,7 +48,8 @@ export default async function MrrBridgePage() {
 
       {entity.bcConfigured && entity.cwConfigured ? (
         <MrrBridgeClient
-          defaultPeriods={periods}
+          defaultPriorMonth={periods.priorMonth}
+          defaultCurrentMonth={periods.currentMonth}
           hubspotConfigured={hubspotConfigured}
         />
       ) : (

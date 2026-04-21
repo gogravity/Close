@@ -431,6 +431,17 @@ export default function ArCleanupClient({
 
   const [diagOpen, setDiagOpen] = useState(false);
 
+  // Cutoff date for bulk-close: default to the oldest BC open invoice date
+  const oldestBcDate = useMemo(() => {
+    const dates = bcRows
+      .filter((r) => r.documentType === "Invoice" && r.postingDate)
+      .map((r) => r.postingDate)
+      .sort();
+    return dates[0] ?? "";
+  }, [bcRows]);
+
+  const [cutoffDate, setCutoffDate] = useState("");
+
   return (
     <div className="space-y-6">
       {/* Diagnostics panel — shows raw sample values to verify match key format */}
@@ -599,6 +610,48 @@ export default function ArCleanupClient({
                 className="rounded border border-slate-300 px-2 py-1 text-sm w-52"
               />
             </label>
+
+            {/* Cutoff date bulk-select */}
+            <div className="flex items-end gap-2 border-l border-slate-200 pl-3">
+              <label className="text-sm">
+                <div className="text-xs font-medium uppercase tracking-wide text-slate-500 mb-1">
+                  Close older than
+                  {oldestBcDate && (
+                    <button
+                      onClick={() => setCutoffDate(oldestBcDate)}
+                      className="ml-1.5 normal-case text-[10px] text-slate-400 hover:text-slate-600 underline underline-offset-2"
+                    >
+                      (oldest BC: {fmtDate(oldestBcDate)})
+                    </button>
+                  )}
+                </div>
+                <input
+                  type="date"
+                  value={cutoffDate}
+                  onChange={(e) => setCutoffDate(e.target.value)}
+                  className="rounded border border-slate-300 px-2 py-1 font-mono text-sm"
+                />
+              </label>
+              <button
+                disabled={!cutoffDate}
+                onClick={() => {
+                  if (!cutoffDate) return;
+                  const ids = actionGroups
+                    .flatMap((g) => g.cwInvoices)
+                    .filter((inv) => inv.date <= cutoffDate)
+                    .map((inv) => inv.id);
+                  setSelected((prev) => {
+                    const next = new Set(prev);
+                    ids.forEach((id) => next.add(id));
+                    return next;
+                  });
+                }}
+                className="rounded border border-amber-300 bg-amber-50 px-3 py-1.5 text-sm font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Select
+              </button>
+            </div>
+
             <div className="ml-auto flex items-center gap-3">
               {selected.size > 0 && (
                 <span className="text-sm text-slate-600">

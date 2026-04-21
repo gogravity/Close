@@ -752,18 +752,17 @@ export type BcCustomerLedgerEntry = {
  */
 export async function listOpenCustomerLedgerEntries(): Promise<BcCustomerLedgerEntry[]> {
   const companyId = await getSelectedCompanyId();
+  // customerLedgerEntries is a v1.0 entity — not available in the v2.0 API surface.
   const path =
     `/companies(${companyId})/customerLedgerEntries?` +
     `$filter=open eq true&` +
-    `$select=id,entryNumber,postingDate,documentType,documentNumber,externalDocumentNumber,` +
-    `customerNumber,customerName,description,amount,remainingAmount,open,dueDate&` +
     `$orderby=postingDate`;
   const out: BcCustomerLedgerEntry[] = [];
   let next: string | null = path;
   while (next) {
     const page: BcPage<BcCustomerLedgerEntry> = next.startsWith("http")
       ? await bcGetAbsolute<BcPage<BcCustomerLedgerEntry>>(next)
-      : await bcGet<BcPage<BcCustomerLedgerEntry>>(next);
+      : await bcGet<BcPage<BcCustomerLedgerEntry>>(next, "v1.0");
     out.push(...page.value);
     next = page["@odata.nextLink"] ?? null;
   }

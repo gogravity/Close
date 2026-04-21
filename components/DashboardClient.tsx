@@ -213,7 +213,6 @@ function BsSection({
           <thead className="bg-slate-50 text-slate-600">
             <tr>
               <th className="px-4 py-2 text-left font-medium">Account</th>
-              <th className="px-4 py-2 text-left font-medium">FS Mapping</th>
               <th className="px-4 py-2 text-right font-medium">Unadjusted Trial Balance</th>
               <th className="px-4 py-2 text-right font-medium text-slate-400">Adjustments</th>
               <th className="px-4 py-2 text-right font-medium">Adjusted Balance</th>
@@ -238,7 +237,6 @@ function BsSection({
                       </span>
                     )}
                   </td>
-                  <td className="px-4 py-1.5 text-slate-500">{r.fsMapping || "—"}</td>
                   <td className="px-4 py-1.5 text-right tabular-nums">
                     {r.balance === 0 ? "–" : fmt(r.balance)}
                   </td>
@@ -256,7 +254,7 @@ function BsSection({
               );
             })}
             <tr className="border-t border-slate-300 bg-slate-50 font-semibold">
-              <td className="px-4 py-1.5" colSpan={2}>
+              <td className="px-4 py-1.5">
                 Total {title}
               </td>
               <td className="px-4 py-1.5 text-right tabular-nums">{fmt(totalBal)}</td>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import React, { useState, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
 
 export type CwRow = {
@@ -55,6 +55,16 @@ type CustomerSummaryRow = {
 };
 
 type CloseResult = { id: number; ok: boolean; error?: string };
+
+type CwPayment = {
+  id: number;
+  type: string;
+  amount: number;
+  balance: number;
+  paymentDate: string;
+  appliedBy?: string;
+  paymentSyncStatus?: string;
+};
 
 type CustomerGroup = {
   companyName: string;
@@ -288,6 +298,26 @@ export default function ArCleanupClient({
   const [statusFilter, setStatusFilter] = useState<RecStatus | "all">("all");
   const [diagOpen, setDiagOpen] = useState(false);
 
+  // Payment detail lazy loading
+  const [expandedCwId, setExpandedCwId] = useState<number | null>(null);
+  const [paymentCache, setPaymentCache] = useState<Map<number, CwPayment[] | "loading" | "error">>(new Map());
+
+  const loadPayments = useCallback(async (cwId: number) => {
+    if (paymentCache.has(cwId)) {
+      setExpandedCwId((prev) => (prev === cwId ? null : cwId));
+      return;
+    }
+    setExpandedCwId(cwId);
+    setPaymentCache((prev) => new Map(prev).set(cwId, "loading"));
+    try {
+      const res = await fetch(`/api/ar-cleanup?invoiceId=${cwId}`);
+      const json = await res.json() as { ok: boolean; payments: CwPayment[]; error?: string };
+      setPaymentCache((prev) => new Map(prev).set(cwId, json.ok ? (json.payments ?? []) : "error"));
+    } catch {
+      setPaymentCache((prev) => new Map(prev).set(cwId, "error"));
+    }
+  }, [paymentCache]);
+
   // Cutoff date for bulk-close on stale tab
   const oldestBcDate = useMemo(() => {
     const dates = bcRows.filter((r) => r.postingDate).map((r) => r.postingDate).sort();
@@ -504,14 +534,19 @@ export default function ArCleanupClient({
     });
   }
 
-  async function closeSelected() {
+  async function applyPaymentSelected() {
     if (selected.size === 0) return;
     setClosing(true);
     try {
+      // Build payload: for each selected CW id, include balance and dueDate
+      const invoicePayload = recRows
+        .filter((r) => r.cwId !== null && selected.has(r.cwId!))
+        .map((r) => ({ id: r.cwId!, balance: r.cwAmount, dueDate: r.dueDate }));
+
       const res = await fetch("/api/ar-cleanup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "close", invoiceIds: Array.from(selected) }),
+        body: JSON.stringify({ action: "apply-payment", invoices: invoicePayload }),
       });
       const json = (await res.json()) as { ok: boolean; results: CloseResult[] };
       setCloseResultsList(json.results ?? []);
@@ -657,11 +692,11 @@ export default function ArCleanupClient({
                 <span className="text-sm text-slate-600">{selected.size} selected · {fmt(selectedBalance)}</span>
               )}
               <button
-                onClick={closeSelected}
+                onClick={applyPaymentSelected}
                 disabled={selected.size === 0 || closing}
                 className="rounded bg-red-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                {closing ? "Closing…" : `Close ${selected.size > 0 ? selected.size : ""} in CW`}
+                {closing ? "Applying…" : `Apply Payment${selected.size > 0 ? ` (${selected.size})` : ""}`}
               </button>
             </div>
           </div>
@@ -687,39 +722,99 @@ export default function ArCleanupClient({
                   const canClose = row.status === "cw-only" && row.cwId !== null;
                   const isSelected = canClose && selected.has(row.cwId!);
                   const closeRes = row.cwId ? closeResultsMap.get(row.cwId) : undefined;
+                  const isExpanded = row.cwId !== null && expandedCwId === row.cwId;
+                  const payments = row.cwId !== null ? paymentCache.get(row.cwId) : undefined;
                   return (
-                    <tr key={i} className={`hover:bg-slate-50 ${isSelected ? "bg-red-50" : ""}`}>
-                      <td className="px-3 py-2">
-                        {canClose && (
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={() => toggleOne(row.cwId!)}
-                            className="rounded"
-                          />
-                        )}
-                      </td>
-                      <td className="px-3 py-2 font-mono text-xs">{row.invoiceNumber}</td>
-                      <td className="px-3 py-2 text-slate-700 max-w-[200px] truncate">{row.customerName}</td>
-                      <td className="px-3 py-2 text-xs text-slate-500">{row.bcDocType || "—"}</td>
-                      <td className="px-3 py-2 text-xs text-slate-500">{row.cwDocType || "—"}</td>
-                      <td className="px-3 py-2 text-right font-mono text-xs">{row.bcAmount !== 0 ? fmt(row.bcAmount) : "—"}</td>
-                      <td className="px-3 py-2 text-right font-mono text-xs">{row.cwAmount !== 0 ? fmt(row.cwAmount) : "—"}</td>
-                      <td className={`px-3 py-2 text-right font-mono text-xs font-semibold ${Math.abs(row.difference) > 0.02 ? "text-red-600" : "text-slate-400"}`}>
-                        {fmtDiff(row.difference)}
-                        {closeRes && (closeRes.ok ? <span className="ml-1 text-emerald-600">✓</span> : <span className="ml-1 text-red-500" title={closeRes.error}>✗</span>)}
-                      </td>
-                      <td className="px-3 py-2">
-                        <span className="inline-block rounded px-1.5 py-0.5 text-[10px] font-medium bg-slate-100 text-slate-600">
-                          {row.agingBucket}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2">
-                        <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${STATUS_STYLE[row.status]}`}>
-                          {STATUS_LABEL[row.status]}
-                        </span>
-                      </td>
-                    </tr>
+                    <React.Fragment key={i}>
+                      <tr
+                        className={`hover:bg-slate-50 ${isSelected ? "bg-red-50" : ""} ${row.cwId ? "cursor-pointer" : ""}`}
+                        onClick={() => row.cwId && loadPayments(row.cwId)}
+                      >
+                        <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                          {canClose && (
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => toggleOne(row.cwId!)}
+                              className="rounded"
+                            />
+                          )}
+                        </td>
+                        <td className="px-3 py-2 font-mono text-xs">
+                          {row.cwId && (
+                            <span className="mr-1 text-slate-300">{isExpanded ? "▾" : "▸"}</span>
+                          )}
+                          {row.invoiceNumber}
+                        </td>
+                        <td className="px-3 py-2 text-slate-700 max-w-[200px] truncate">{row.customerName}</td>
+                        <td className="px-3 py-2 text-xs text-slate-500">{row.bcDocType || "—"}</td>
+                        <td className="px-3 py-2 text-xs text-slate-500">{row.cwDocType || "—"}</td>
+                        <td className="px-3 py-2 text-right font-mono text-xs">{row.bcAmount !== 0 ? fmt(row.bcAmount) : "—"}</td>
+                        <td className="px-3 py-2 text-right font-mono text-xs">{row.cwAmount !== 0 ? fmt(row.cwAmount) : "—"}</td>
+                        <td className={`px-3 py-2 text-right font-mono text-xs font-semibold ${Math.abs(row.difference) > 0.02 ? "text-red-600" : "text-slate-400"}`}>
+                          {fmtDiff(row.difference)}
+                          {closeRes && (closeRes.ok ? <span className="ml-1 text-emerald-600">✓</span> : <span className="ml-1 text-red-500" title={closeRes.error}>✗</span>)}
+                        </td>
+                        <td className="px-3 py-2">
+                          <span className="inline-block rounded px-1.5 py-0.5 text-[10px] font-medium bg-slate-100 text-slate-600">
+                            {row.agingBucket}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2">
+                          <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${STATUS_STYLE[row.status]}`}>
+                            {STATUS_LABEL[row.status]}
+                          </span>
+                        </td>
+                      </tr>
+                      {isExpanded && (
+                        <tr className="bg-slate-50">
+                          <td colSpan={10} className="px-6 py-3 border-b border-slate-200">
+                            {payments === "loading" && (
+                              <p className="text-xs text-slate-400 italic">Loading payment history…</p>
+                            )}
+                            {payments === "error" && (
+                              <p className="text-xs text-red-500">Failed to load payment history.</p>
+                            )}
+                            {Array.isArray(payments) && payments.length === 0 && (
+                              <p className="text-xs text-slate-400 italic">No payments recorded in CW for this invoice.</p>
+                            )}
+                            {Array.isArray(payments) && payments.length > 0 && (
+                              <div>
+                                <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">CW Payment History</div>
+                                <table className="text-xs">
+                                  <thead>
+                                    <tr className="text-[10px] uppercase tracking-wide text-slate-400 text-left">
+                                      <th className="pr-6 pb-1">Payment Date</th>
+                                      <th className="pr-6 pb-1">Type</th>
+                                      <th className="pr-6 pb-1 text-right">Amount</th>
+                                      <th className="pr-6 pb-1 text-right">Remaining</th>
+                                      <th className="pr-6 pb-1">Applied By</th>
+                                      <th className="pb-1">Sync Status</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-100">
+                                    {payments.map((p) => (
+                                      <tr key={p.id}>
+                                        <td className="pr-6 py-1 font-mono">{fmtDate(p.paymentDate.slice(0, 10))}</td>
+                                        <td className="pr-6 py-1 text-slate-500">{p.type === "P" ? "Payment" : p.type === "C" ? "Credit" : p.type}</td>
+                                        <td className="pr-6 py-1 text-right font-mono font-semibold text-emerald-700">{fmt(p.amount)}</td>
+                                        <td className="pr-6 py-1 text-right font-mono text-slate-500">{fmt(p.balance)}</td>
+                                        <td className="pr-6 py-1 text-slate-500">{p.appliedBy || "—"}</td>
+                                        <td className="py-1">
+                                          <span className={`inline-block rounded px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide ${p.paymentSyncStatus === "Unapplied" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-500"}`}>
+                                            {p.paymentSyncStatus || "—"}
+                                          </span>
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                   );
                 })}
               </tbody>
@@ -855,11 +950,11 @@ export default function ArCleanupClient({
             <div className="ml-auto flex items-center gap-3">
               {selected.size > 0 && <span className="text-sm text-slate-600">{selected.size} selected · {fmt(selectedBalance)}</span>}
               <button
-                onClick={closeSelected}
+                onClick={applyPaymentSelected}
                 disabled={selected.size === 0 || closing}
                 className="rounded bg-amber-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                {closing ? "Closing…" : `Close ${selected.size > 0 ? selected.size : ""} in CW`}
+                {closing ? "Applying…" : `Apply Payment${selected.size > 0 ? ` (${selected.size})` : ""}`}
               </button>
             </div>
           </div>

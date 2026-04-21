@@ -98,6 +98,30 @@ export async function cwPatch<T = unknown>(path: string, body: unknown): Promise
   return text ? (JSON.parse(text) as T) : ({} as T);
 }
 
+export async function cwPost<T = unknown>(path: string, body: unknown): Promise<T> {
+  const creds = await loadCredentials();
+  const host = normalizeHost(creds.siteUrl);
+  const url = `https://${host}/v4_6_release/apis/3.0${path}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: buildAuthHeader(creds),
+      clientId: creds.clientId,
+      "Content-Type": "application/json",
+      Accept: "application/vnd.connectwise.com+json; version=2020.1",
+    },
+    body: JSON.stringify(body),
+    cache: "no-store",
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    let errBody: unknown = text;
+    try { errBody = JSON.parse(text); } catch { /* keep as text */ }
+    throw new ConnectWiseError(`CW POST ${res.status} ${res.statusText}`, res.status, errBody);
+  }
+  return text ? (JSON.parse(text) as T) : ({} as T);
+}
+
 export type CwSystemInfo = {
   version: string;
   isCloud: boolean;
@@ -612,12 +636,52 @@ export async function listAllOpenCwInvoices(): Promise<CwInvoice[]> {
 }
 
 /**
- * Close a CW invoice by setting closedFlag = true via PATCH.
- * This marks the invoice as closed in ConnectWise regardless of balance.
- * Use when BC shows the invoice as paid but CW still reports it open.
+ * Zero out a CW invoice balance by posting a payment for the full balance.
+ * If the invoice already has a payment record, patches it instead.
+ * paymentDate should be an ISO datetime string (e.g. "2024-03-31T00:00:00Z").
  */
-export async function closeCwInvoice(invoiceId: number): Promise<void> {
-  await cwPatch(`/finance/invoices/${invoiceId}`, [
-    { op: "replace", path: "closedFlag", value: true },
-  ]);
+export async function applyPaymentToCwInvoice(
+  invoiceId: number,
+  balance: number,
+  paymentDate: string
+): Promise<void> {
+  // Check for existing payment records
+  const existing = await getCwInvoicePayments(invoiceId);
+  if (existing.length === 0) {
+    // POST a new payment
+    await cwPost(`/finance/invoices/${invoiceId}/payments`, {
+      type: "P",
+      amount: balance,
+      paymentDate,
+    });
+  } else {
+    // PATCH the existing payment to cover the full remaining balance
+    const p = existing[0];
+    const newAmount = p.amount + balance;
+    await cwPatch(`/finance/invoices/${invoiceId}/payments/${p.id}`, [
+      { op: "replace", path: "amount", value: newAmount },
+      { op: "replace", path: "paymentDate", value: paymentDate },
+    ]);
+  }
+}
+
+export type CwInvoicePayment = {
+  id: number;
+  type: string;         // "P" = payment, "C" = credit, etc.
+  amount: number;
+  balance: number;
+  paymentDate: string;  // ISO datetime
+  appliedBy?: string;
+  paymentSyncStatus?: string;
+};
+
+/**
+ * Returns the payment line items applied to a specific CW invoice.
+ * Used for lazy-loading payment details in the AR reconciliation UI.
+ */
+export async function getCwInvoicePayments(invoiceId: number): Promise<CwInvoicePayment[]> {
+  const rows = await cwGet<CwInvoicePayment[]>(
+    `/finance/invoices/${invoiceId}/payments?pageSize=100`
+  );
+  return Array.isArray(rows) ? rows : [];
 }

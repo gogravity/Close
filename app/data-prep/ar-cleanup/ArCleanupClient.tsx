@@ -272,12 +272,19 @@ export default function ArCleanupClient({
   const [activeSection, setActiveSection] = useState<"action" | "bc-only" | "matched">("action");
   const [search, setSearch] = useState("");
 
-  // Build BC lookup: externalDocumentNumber → BcRow
-  const bcByExtDocNum = useMemo(() => {
+  // Build BC lookup by BOTH externalDocumentNumber and documentNumber.
+  // CW invoice number may land in either field depending on how the BC
+  // integration is configured — try both before calling something unmatched.
+  const bcByInvoiceKey = useMemo(() => {
     const m = new Map<string, BcRow>();
     for (const bc of bcRows) {
       if (bc.externalDocumentNumber) {
         m.set(bc.externalDocumentNumber.toUpperCase(), bc);
+      }
+      if (bc.documentNumber) {
+        // Only set if not already matched by externalDocumentNumber
+        const key = bc.documentNumber.toUpperCase();
+        if (!m.has(key)) m.set(key, bc);
       }
     }
     return m;
@@ -294,7 +301,7 @@ export default function ArCleanupClient({
     return m;
   }, [bcRows]);
 
-  // CW invoice numbers for reverse lookup
+  // CW invoice numbers for reverse lookup (check both BC fields)
   const cwInvoiceNumbers = useMemo(
     () => new Set(cwRows.map((r) => r.invoiceNumber.toUpperCase())),
     [cwRows]
@@ -306,7 +313,7 @@ export default function ArCleanupClient({
     const matchedRows: MatchedRow[] = [];
 
     for (const cw of cwRows) {
-      const bc = bcByExtDocNum.get(cw.invoiceNumber.toUpperCase());
+      const bc = bcByInvoiceKey.get(cw.invoiceNumber.toUpperCase());
       if (bc) matchedRows.push({ cw, bc });
       else actionInvoices.push(cw);
     }
@@ -332,16 +339,16 @@ export default function ArCleanupClient({
       .sort((a, b) => b.totalCwBalance - a.totalCwBalance);
 
     return { actionGroups, matchedRows };
-  }, [cwRows, bcByExtDocNum, bcByCustomer]);
+  }, [cwRows, bcByInvoiceKey, bcByCustomer]);
 
-  // BC-only entries
+  // BC-only entries: not matched by either documentNumber or externalDocumentNumber
   const bcOnlyRows = useMemo(
     () =>
       bcRows
         .filter(
           (bc) =>
-            !bc.externalDocumentNumber ||
-            !cwInvoiceNumbers.has(bc.externalDocumentNumber.toUpperCase())
+            !cwInvoiceNumbers.has(bc.externalDocumentNumber.toUpperCase()) &&
+            !cwInvoiceNumbers.has(bc.documentNumber.toUpperCase())
         )
         .sort((a, b) => Math.abs(b.remainingAmount) - Math.abs(a.remainingAmount)),
     [bcRows, cwInvoiceNumbers]
@@ -422,8 +429,71 @@ export default function ArCleanupClient({
     }
   }
 
+  const [diagOpen, setDiagOpen] = useState(false);
+
   return (
     <div className="space-y-6">
+      {/* Diagnostics panel — shows raw sample values to verify match key format */}
+      <div className="rounded border border-slate-200 bg-slate-50">
+        <button
+          onClick={() => setDiagOpen((v) => !v)}
+          className="w-full flex items-center gap-2 px-4 py-2.5 text-xs font-medium text-slate-500 hover:text-slate-800 text-left"
+        >
+          <span>{diagOpen ? "▾" : "▸"}</span>
+          Diagnostics — sample match keys (CW invoice # vs BC doc # / ext doc #)
+        </button>
+        {diagOpen && (
+          <div className="border-t border-slate-200 p-4 grid grid-cols-2 gap-6">
+            <div>
+              <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                CW — invoiceNumber (first 10 open)
+              </div>
+              <table className="w-full text-xs font-mono">
+                <thead>
+                  <tr className="text-left text-[10px] text-slate-400">
+                    <th className="pb-1">Invoice #</th>
+                    <th className="pb-1">Company</th>
+                    <th className="pb-1 text-right">Balance</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {cwRows.slice(0, 10).map((r) => (
+                    <tr key={r.id}>
+                      <td className="py-0.5">{r.invoiceNumber}</td>
+                      <td className="py-0.5 text-slate-500 truncate max-w-[120px]">{r.companyName}</td>
+                      <td className="py-0.5 text-right">{fmt(r.balance)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div>
+              <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                BC — documentNumber / externalDocumentNumber (first 10 open)
+              </div>
+              <table className="w-full text-xs font-mono">
+                <thead>
+                  <tr className="text-left text-[10px] text-slate-400">
+                    <th className="pb-1">Doc #</th>
+                    <th className="pb-1">Ext Doc #</th>
+                    <th className="pb-1">Customer</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {bcRows.slice(0, 10).map((r) => (
+                    <tr key={r.id}>
+                      <td className="py-0.5">{r.documentNumber}</td>
+                      <td className="py-0.5 text-slate-400">{r.externalDocumentNumber || "—"}</td>
+                      <td className="py-0.5 text-slate-500 truncate max-w-[120px]">{r.customerName}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Summary */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <SummaryCard

@@ -70,6 +70,34 @@ export async function cwGet<T = unknown>(pathAndQuery: string): Promise<T> {
   return JSON.parse(text) as T;
 }
 
+export async function cwPatch<T = unknown>(path: string, body: unknown): Promise<T> {
+  const creds = await loadCredentials();
+  const host = normalizeHost(creds.siteUrl);
+  const url = `https://${host}/v4_6_release/apis/3.0${path}`;
+  const res = await fetch(url, {
+    method: "PATCH",
+    headers: {
+      Authorization: buildAuthHeader(creds),
+      clientId: creds.clientId,
+      "Content-Type": "application/json",
+      Accept: "application/vnd.connectwise.com+json; version=2020.1",
+    },
+    body: JSON.stringify(body),
+    cache: "no-store",
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    let errBody: unknown = text;
+    try {
+      errBody = JSON.parse(text);
+    } catch {
+      // keep as text
+    }
+    throw new ConnectWiseError(`CW PATCH ${res.status} ${res.statusText}`, res.status, errBody);
+  }
+  return text ? (JSON.parse(text) as T) : ({} as T);
+}
+
 export type CwSystemInfo = {
   version: string;
   isCloud: boolean;
@@ -553,4 +581,43 @@ export async function listTimeEntriesForRange(
     page += 1;
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// AR Cleanup helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * All CW invoices with balance > 0 — no date restriction. Used for the AR
+ * cleanup tool to find invoices that are still open in CW but closed in BC.
+ */
+export async function listAllOpenCwInvoices(): Promise<CwInvoice[]> {
+  const cond = `balance > 0`;
+  const pageSize = 1000;
+  const fields =
+    "id,invoiceNumber,date,dueDate,status,type,subtotal,total,salesTax,balance,company,agreement";
+  const out: CwInvoice[] = [];
+  let page = 1;
+  while (true) {
+    const rows = await cwGet<CwInvoice[]>(
+      `/finance/invoices?conditions=${encodeURIComponent(
+        cond
+      )}&orderBy=date&fields=${fields}&page=${page}&pageSize=${pageSize}`
+    );
+    out.push(...rows);
+    if (rows.length < pageSize) break;
+    page += 1;
+  }
+  return out;
+}
+
+/**
+ * Close a CW invoice by setting closedFlag = true via PATCH.
+ * This marks the invoice as closed in ConnectWise regardless of balance.
+ * Use when BC shows the invoice as paid but CW still reports it open.
+ */
+export async function closeCwInvoice(invoiceId: number): Promise<void> {
+  await cwPatch(`/finance/invoices/${invoiceId}`, [
+    { op: "replace", path: "closedFlag", value: true },
+  ]);
 }

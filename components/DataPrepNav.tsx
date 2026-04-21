@@ -7,6 +7,7 @@ type Item = { href: string; label: string };
 
 const ITEMS: Item[] = [
   { href: "/data-prep/invoice-validation", label: "Invoice Validation" },
+  { href: "/data-prep/ar-cleanup", label: "AR Cleanup" },
   { href: "/data-prep/pl-comparison", label: "P&L Comparison" },
   { href: "/data-prep/payroll", label: "Payroll" },
 ];

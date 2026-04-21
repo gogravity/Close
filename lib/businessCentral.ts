@@ -746,26 +746,94 @@ export type BcCustomerLedgerEntry = {
 };
 
 /**
- * Returns all OPEN customer ledger entries (invoices, credit memos, etc.)
- * as of the given date. Filters server-side to open=true so we only get
- * entries with a remaining balance — includes credit memos and all AR types.
+ * Returns all open AR entries by combining:
+ *   - salesInvoices with status = 'Open' (confirmed unpaid posted invoices)
+ *   - salesCreditMemos with remainingAmount != 0 (outstanding credits)
+ *
+ * customerLedgerEntries does not exist as a direct /companies({id})/...
+ * endpoint in either BC API v1.0 or v2.0 — both return 404.
+ * salesInvoices and salesCreditMemos are the reliable substitutes.
  */
 export async function listOpenCustomerLedgerEntries(): Promise<BcCustomerLedgerEntry[]> {
   const companyId = await getSelectedCompanyId();
-  // customerLedgerEntries is a v1.0 entity — not available in the v2.0 API surface.
-  const path =
-    `/companies(${companyId})/customerLedgerEntries?` +
-    `$filter=open eq true&` +
-    `$orderby=postingDate`;
-  const out: BcCustomerLedgerEntry[] = [];
-  let next: string | null = path;
+
+  // --- Open sales invoices ---
+  const invFilter = `status eq 'Open'`;
+  const invPath =
+    `/companies(${companyId})/salesInvoices?` +
+    `$filter=${encodeURIComponent(invFilter)}&` +
+    `$select=id,number,externalDocumentNumber,invoiceDate,dueDate,customerNumber,customerName,status,totalAmountIncludingTax,remainingAmount&` +
+    `$orderby=invoiceDate`;
+  const invoices: BcSalesInvoice[] = [];
+  let next: string | null = invPath;
   while (next) {
-    const page: BcPage<BcCustomerLedgerEntry> = next.startsWith("http")
-      ? await bcGetAbsolute<BcPage<BcCustomerLedgerEntry>>(next)
-      : await bcGet<BcPage<BcCustomerLedgerEntry>>(next, "v1.0");
-    out.push(...page.value);
+    const page: BcPage<BcSalesInvoice> = next.startsWith("http")
+      ? await bcGetAbsolute<BcPage<BcSalesInvoice>>(next)
+      : await bcGet<BcPage<BcSalesInvoice>>(next);
+    invoices.push(...page.value);
     next = page["@odata.nextLink"] ?? null;
   }
+
+  // --- Open credit memos (no status filter available; fetch last 3 years and
+  //     keep those with a remaining amount, i.e. not fully applied) ---
+  const threeYearsAgo = `${new Date().getUTCFullYear() - 3}-01-01`;
+  const cmFilter = `postingDate ge ${threeYearsAgo}`;
+  const cmPath =
+    `/companies(${companyId})/salesCreditMemos?` +
+    `$filter=${encodeURIComponent(cmFilter)}&` +
+    `$select=id,number,externalDocumentNumber,postingDate,customerId,customerNumber,customerName,totalAmountIncludingTax,remainingAmount&` +
+    `$orderby=postingDate`;
+  const creditMemos: (BcSalesCreditMemo & { externalDocumentNumber?: string; postingDate?: string; remainingAmount?: number })[] = [];
+  let cmNext: string | null = cmPath;
+  while (cmNext) {
+    const page: BcPage<BcSalesCreditMemo & { externalDocumentNumber?: string; postingDate?: string; remainingAmount?: number }> =
+      cmNext.startsWith("http")
+        ? await bcGetAbsolute(cmNext)
+        : await bcGet(cmNext);
+    creditMemos.push(...page.value);
+    cmNext = page["@odata.nextLink"] ?? null;
+  }
+
+  const out: BcCustomerLedgerEntry[] = [];
+
+  for (const inv of invoices) {
+    out.push({
+      id: inv.id,
+      entryNumber: 0,
+      postingDate: inv.invoiceDate,
+      documentType: "Invoice",
+      documentNumber: inv.number,
+      externalDocumentNumber: inv.externalDocumentNumber ?? "",
+      customerNumber: inv.customerNumber,
+      customerName: inv.customerName,
+      description: "",
+      amount: inv.totalAmountIncludingTax,
+      remainingAmount: inv.remainingAmount ?? inv.totalAmountIncludingTax,
+      open: true,
+      dueDate: inv.dueDate,
+    });
+  }
+
+  for (const cm of creditMemos) {
+    const remaining = cm.remainingAmount ?? 0;
+    if (remaining === 0) continue; // fully applied — skip
+    out.push({
+      id: cm.id,
+      entryNumber: 0,
+      postingDate: cm.postingDate ?? "",
+      documentType: "Credit Memo",
+      documentNumber: cm.number,
+      externalDocumentNumber: cm.externalDocumentNumber ?? "",
+      customerNumber: cm.customerNumber ?? "",
+      customerName: cm.customerName ?? "",
+      description: "",
+      amount: -(cm.totalAmountIncludingTax ?? 0),
+      remainingAmount: remaining,
+      open: true,
+      dueDate: undefined,
+    });
+  }
+
   return out;
 }
 

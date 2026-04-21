@@ -729,6 +729,47 @@ export async function listSalesInvoices(
   return out;
 }
 
+export type BcCustomerLedgerEntry = {
+  id: string;
+  entryNumber: number;
+  postingDate: string;
+  documentType: string; // "Invoice" | "Credit Memo" | "Payment" | "Refund" | etc.
+  documentNumber: string;
+  externalDocumentNumber?: string;
+  customerNumber: string;
+  customerName: string;
+  description?: string;
+  amount: number;
+  remainingAmount: number;
+  open: boolean;
+  dueDate?: string;
+};
+
+/**
+ * Returns all OPEN customer ledger entries (invoices, credit memos, etc.)
+ * as of the given date. Filters server-side to open=true so we only get
+ * entries with a remaining balance — includes credit memos and all AR types.
+ */
+export async function listOpenCustomerLedgerEntries(): Promise<BcCustomerLedgerEntry[]> {
+  const companyId = await getSelectedCompanyId();
+  const path =
+    `/companies(${companyId})/customerLedgerEntries?` +
+    `$filter=open eq true&` +
+    `$select=id,entryNumber,postingDate,documentType,documentNumber,externalDocumentNumber,` +
+    `customerNumber,customerName,description,amount,remainingAmount,open,dueDate&` +
+    `$orderby=postingDate`;
+  const out: BcCustomerLedgerEntry[] = [];
+  let next: string | null = path;
+  while (next) {
+    const page: BcPage<BcCustomerLedgerEntry> = next.startsWith("http")
+      ? await bcGetAbsolute<BcPage<BcCustomerLedgerEntry>>(next)
+      : await bcGet<BcPage<BcCustomerLedgerEntry>>(next);
+    out.push(...page.value);
+    next = page["@odata.nextLink"] ?? null;
+  }
+  return out;
+}
+
 export async function getSelectedCompany(): Promise<BcCompany | null> {
   const creds = await loadCredentials();
   if (!creds.companyName) return null;

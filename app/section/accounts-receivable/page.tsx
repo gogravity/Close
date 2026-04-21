@@ -7,8 +7,10 @@ import {
   getAccountBalances,
   getAgedReceivables,
   listGlEntries,
+  listOpenCustomerLedgerEntries,
   BusinessCentralError,
 } from "@/lib/businessCentral";
+import { listInvoices } from "@/lib/connectwise";
 import { getArReconInput } from "@/lib/arRecon";
 import ArReconClient from "./ArReconClient";
 import AltPaymentsPane from "./AltPaymentsPane";
@@ -21,6 +23,7 @@ function periodStartOf(periodEnd: string): string {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-01`;
 }
 
+
 type TabKey = "rec" | "aging" | "alt-payments" | "alt-activity";
 
 export default async function ArSectionPage({
@@ -29,9 +32,7 @@ export default async function ArSectionPage({
   searchParams: Promise<{ tab?: string; account?: string }>;
 }) {
   const params = await searchParams;
-  // Accept either ?tab= or legacy ?account=100140 (sidebar sub-tab pattern).
-  let activeTab: TabKey =
-    (params.tab as TabKey | undefined) ?? "rec";
+  let activeTab: TabKey = (params.tab as TabKey | undefined) ?? "rec";
   if (params.account === "100140" && !params.tab) activeTab = "alt-payments";
   const account = params.account;
   const entity = await getEntityConfig();
@@ -40,13 +41,51 @@ export default async function ArSectionPage({
   const section = findSection("accounts-receivable")!;
 
   try {
-    const [accounts, balances, mappings, aging, input] = await Promise.all([
-      listAccounts(),
-      getAccountBalances(entity.periodEnd),
-      getAccountMappings(),
-      getAgedReceivables(),
-      getArReconInput(entity.periodEnd),
-    ]);
+    const periodEnd = entity.periodEnd;
+    const periodStart = periodStartOf(periodEnd);
+
+    // Use a wide CW lookback to catch all open invoices regardless of age
+    const cwLookbackStart = `${new Date().getUTCFullYear() - 3}-01-01`;
+
+    const [accounts, balances, mappings, aging, input, cwInvoicesRaw, bcLedgerRaw] =
+      await Promise.all([
+        listAccounts(),
+        getAccountBalances(periodEnd),
+        getAccountMappings(),
+        getAgedReceivables(),
+        getArReconInput(periodEnd),
+        listInvoices(cwLookbackStart, periodEnd).catch(() => []),
+        // BC Customer Ledger Entries — all open entries, includes invoices + credit memos
+        listOpenCustomerLedgerEntries().catch(() => []),
+      ]);
+
+    // CW: open invoices (balance > 0)
+    const cwOpenInvoices = cwInvoicesRaw
+      .filter((inv) => (inv.balance ?? 0) > 0.005)
+      .map((inv) => ({
+        id: inv.id,
+        invoiceNumber: inv.invoiceNumber,
+        date: inv.date.slice(0, 10),
+        dueDate: inv.dueDate?.slice(0, 10) ?? "",
+        companyName: inv.company?.name ?? "",
+        total: (inv.total ?? 0) + (inv.salesTax ?? 0),
+        balance: inv.balance ?? 0,
+      }));
+
+    // BC: open customer ledger entries — invoices, credit memos, all AR entries
+    const bcOpenInvoices = bcLedgerRaw.map((e) => ({
+      id: e.id,
+      documentType: e.documentType,
+      documentNumber: e.documentNumber,
+      externalDocumentNumber: e.externalDocumentNumber ?? "",
+      postingDate: e.postingDate,
+      dueDate: e.dueDate ?? "",
+      customerNumber: e.customerNumber,
+      customerName: e.customerName,
+      description: e.description ?? "",
+      amount: e.amount,
+      remainingAmount: e.remainingAmount,
+    }));
 
     const arAccountNumbers = Object.entries(mappings)
       .filter(([, slug]) => slug === "accounts-receivable")
@@ -55,12 +94,7 @@ export default async function ArSectionPage({
 
     const isAllowance = (name: string) => /allowance/i.test(name);
     const allowanceAcct = arAccounts.find((a) => isAllowance(a.displayName));
-    // Payment gateway accounts (e.g. Alternative Payments) get their own sub-tab.
-    // Detection: balance sheet account in subCategory "Cash" that was explicitly
-    // remapped into the AR section — those are sweep/payment-gateway accounts.
-    const paymentGatewayAccts = arAccounts.filter(
-      (a) => a.subCategory === "Cash"
-    );
+    const paymentGatewayAccts = arAccounts.filter((a) => a.subCategory === "Cash");
     const arPostingAccounts = arAccounts.filter(
       (a) => !isAllowance(a.displayName) && a.subCategory !== "Cash"
     );
@@ -71,16 +105,10 @@ export default async function ArSectionPage({
     );
     const allowanceGlBalance = allowanceAcct ? balances.get(allowanceAcct.number) ?? 0 : 0;
 
-    // The Alt Payments / Alt Pmt Activity tabs always target the one
-    // payment-gateway account mapped into this section (there's typically
-    // only one — the Alternative Payments sweep).
     const gatewayAccount = paymentGatewayAccts[0] ?? null;
     const needsGatewayData =
       activeTab === "alt-payments" || activeTab === "alt-activity";
     void account;
-
-    const periodEnd = entity.periodEnd;
-    const periodStart = periodStartOf(periodEnd);
 
     const priorPeriodEndDate = new Date(periodStart);
     priorPeriodEndDate.setUTCDate(priorPeriodEndDate.getUTCDate() - 1);
@@ -116,18 +144,11 @@ export default async function ArSectionPage({
           </span>
         </header>
 
-        {/* Tab strip — mirrors the Excel workbook tab names for this section */}
         <nav className="mb-6 flex flex-wrap gap-1 border-b border-slate-200">
-          <TabLink
-            href="/section/accounts-receivable"
-            active={activeTab === "rec"}
-          >
+          <TabLink href="/section/accounts-receivable" active={activeTab === "rec"}>
             AR Rec & Analysis
           </TabLink>
-          <TabLink
-            href="/section/accounts-receivable?tab=aging"
-            active={activeTab === "aging"}
-          >
+          <TabLink href="/section/accounts-receivable?tab=aging" active={activeTab === "aging"}>
             AR Aging
           </TabLink>
           {gatewayAccount && (
@@ -181,6 +202,8 @@ export default async function ArSectionPage({
                 : null;
             })()}
             initialInput={input}
+            cwOpenInvoices={cwOpenInvoices}
+            bcOpenInvoices={bcOpenInvoices}
             hideCustomerDetail
           />
         )}

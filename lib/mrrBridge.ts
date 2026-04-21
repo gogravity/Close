@@ -25,6 +25,19 @@ import { listClosedWonDeals, calculateDealMrr } from "./hubspot";
 // Classification lives at the *customer* level (not the agreement level), so
 // a customer with one agreement dropped and another added on the same month
 // nets to an upsell/downsell, not churn + new_client.
+//
+// Category definitions (per Lyra/MSP standard):
+//   new_acquisition_beginning  Opening balance MRR for newly acquired opcos
+//   fx_adjustment              FX rate change adjustments (foreign currency opcos)
+//   one_time_adj               Unusual one-off items (double billing, etc) — manual only
+//   recurring_licenses         Large annual licenses not yet reclassified — manual only
+//   new_client                 Completely new logo with no prior MRR history
+//   price_increase             Same-service price up for existing client
+//   upsell                     Existing client adds new or more services (qty up)
+//   price_decrease             Same-service price down for existing client
+//   downsell                   Existing client drops some services, remains a client
+//   churn                      Client terminates ALL services
+//   flat                       No net change
 // ---------------------------------------------------------------------------
 
 const MRR_ACCOUNTS = [
@@ -37,7 +50,6 @@ const MRR_ACCOUNTS = [
 
 const CLOUD_SUBCATEGORIES = new Set(["365 Monthly", "365 Annual", "Azure"]);
 
-// Known customer-name aliases → canonical display name.
 const CUSTOMER_ALIASES: Record<string, string> = {
   "lyra communications": "Telco Experts",
   "telco experts": "Telco Experts",
@@ -45,48 +57,44 @@ const CUSTOMER_ALIASES: Record<string, string> = {
 };
 
 export type MrrBridgeInput = {
-  priorStart: string; // YYYY-MM-DD
+  priorStart: string;
   priorEnd: string;
   currentStart: string;
   currentEnd: string;
   priorSignedNotOnboarded?: number;
-  /** When HubSpot isn't configured, set to true to skip the pipeline fetch. */
   skipHubspot?: boolean;
 };
 
 export type BridgeLineCategory =
+  | "new_acquisition_beginning"
+  | "fx_adjustment"
+  | "one_time_adj"
+  | "recurring_licenses"
   | "new_client"
   | "price_increase"
   | "upsell"
+  | "price_decrease"
   | "downsell"
   | "churn"
   | "flat";
 
 export type BridgeLine = {
-  rowId: string; // stable id for client-side state keyed to this line
+  rowId: string;
   company: string;
   agreement: string;
-  agreementId: number | null; // null when the line isn't mapped to a CW agreement
+  agreementId: number | null;
   priorMrr: number;
   currentMrr: number;
   change: number;
   category: BridgeLineCategory;
-  // Populated for lines backed by a CW agreement — lets the UI drill into
-  // per-product detail on expand.
   products?: ProductChange[];
-  // Sum of per-product price-increase sub-amounts (positive = price up).
   priceIncreaseAmount?: number;
+  priceDecreaseAmount?: number;
 };
 
-/**
- * Customer-level roll-up. Movement detail + summary totals flow through
- * customers so credit-memo / offsetting agreement lines net out for the
- * same customer (e.g. KDC's credit memo no longer inflates both upsell
- * and downsell columns).
- */
 export type BridgeCustomer = {
-  customerId: string; // normalized company name
-  customerName: string; // display name
+  customerId: string;
+  customerName: string;
   priorMrr: number;
   currentMrr: number;
   change: number;
@@ -102,13 +110,12 @@ export type SignedDeal = {
 };
 
 export type MrrBridgeResult = {
-  priorPeriod: string; // "Feb 2026"
+  priorPeriod: string;
   currentPeriod: string;
   priorStart: string;
   priorEnd: string;
   currentStart: string;
   currentEnd: string;
-
   beginningMrr: number;
   endingMrr: number;
   endingArr: number;
@@ -118,20 +125,17 @@ export type MrrBridgeResult = {
   lostMrrDownsell: number;
   lostMrrChurn: number;
   netChange: number;
-
   mrrGrowthPct: number;
   netMrrRetentionPct: number;
   grossMrrRetentionPct: number;
   grossMrrChurn: number;
-
   beginningSignedNotOnboarded: number;
   newSignedNotOnboarded: number;
   lessOnboarded: number;
   endingSignedNotOnboarded: number;
   hubspotSkipped: boolean;
-
-  lines: BridgeLine[]; // flat per-agreement lines (legacy consumers)
-  customers: BridgeCustomer[]; // customer-grouped view used by the UI
+  lines: BridgeLine[];
+  customers: BridgeCustomer[];
   signedDeals: SignedDeal[];
 };
 
@@ -156,9 +160,8 @@ function shiftDate(isoDate: string, days: number): string {
   return anchor.toISOString().slice(0, 10);
 }
 
-/** Normalize a CW/BC company name for cross-month matching. Strips parenthetical
- *  suffixes so "Preferred Rate (American Pacific)" and "Preferred Rate (Margo)"
- *  consolidate to "Preferred Rate". */
+/** Strip parenthetical suffixes so "Preferred Rate (American Pacific)" and
+ *  "Preferred Rate (Margo)" consolidate to "Preferred Rate". */
 function normalizeCompany(name: string): string {
   const base = name.replace(/\s*\(.*\)\s*$/, "").trim();
   return base || name;
@@ -172,16 +175,13 @@ function canonicalizeCustomer(name: string): string {
 function extractJeCustomer(description: string): string {
   const desc = (description ?? "").trim();
   if (/^Adjusting Deferred Charge/i.test(desc)) return "";
-  // ACH style: "COMPANY NAME: X   SEC CODE: Y"
   const achMatch = /COMPANY NAME:\s*([^\s]+(?:\s+[^\s]+)*?)\s{2,}/.exec(desc);
   if (achMatch) {
     return canonicalizeCustomer(achMatch[1].trim().replace(/,$/, "").trim());
   }
-  // Comma-separated with no "Invoice" → first segment
   if (desc.includes(",") && !desc.includes("Invoice")) {
     return canonicalizeCustomer(desc.split(",")[0].trim());
   }
-  // "Customer - Invoice XXX"
   if (desc.includes(" - Invoice")) {
     return canonicalizeCustomer(desc.split(" - Invoice")[0].trim());
   }
@@ -202,11 +202,10 @@ function extractJeCustomer(description: string): string {
 type GlRow = {
   documentNumber: string;
   description: string;
-  net: number; // credit - debit
+  net: number;
 };
 
 async function fetchGlEntries(start: string, end: string): Promise<GlRow[]> {
-  // One query for all MRR accounts at once (server-side filtered).
   const entries = await listGlEntriesRange(start, end, MRR_ACCOUNTS);
   return entries.map((e) => ({
     documentNumber: e.documentNumber ?? "",
@@ -234,22 +233,12 @@ function buildCwInvoiceMap(invoices: CwInvoice[]): Map<string, CwInvoiceInfo> {
   return out;
 }
 
-async function fetchCwInvoiceMap(
-  start: string,
-  end: string
-): Promise<Map<string, CwInvoiceInfo>> {
-  // 7-day buffer on each side catches invoices dated near the period boundary
-  // but posted to GL inside the period.
+async function fetchCwInvoiceMap(start: string, end: string): Promise<Map<string, CwInvoiceInfo>> {
   const invoices = await listInvoices(shiftDate(start, -7), shiftDate(end, 7));
   return buildCwInvoiceMap(invoices);
 }
 
-async function fetchDgCustomerMap(
-  start: string,
-  end: string
-): Promise<Map<string, string>> {
-  // DG-* document numbers on GL rows map to BC sales invoices with the same
-  // number. Only DG-* prefixed ones are Datagate-billed VoIP customers.
+async function fetchDgCustomerMap(start: string, end: string): Promise<Map<string, string>> {
   const invoices = await listSalesInvoices(start, end);
   const out = new Map<string, string>();
   for (const inv of invoices) {
@@ -261,18 +250,10 @@ async function fetchDgCustomerMap(
 
 type ScmInfo = {
   customerName: string;
-  /** When the credit memo was applied to a specific invoice in BC, this is
-   *  that invoice's number. Empty string if standalone. */
   appliedToInvoice: string;
 };
 
-async function fetchScmCustomerMap(
-  start: string,
-  end: string
-): Promise<Map<string, ScmInfo>> {
-  // Credit memos (SCM-*) — capture both the customer name and, when present,
-  // the specific invoice the credit was applied against. Linked credits fold
-  // into the original invoice's agreement key during `buildAgreementTotals`.
+async function fetchScmCustomerMap(start: string, end: string): Promise<Map<string, ScmInfo>> {
   const buf = 7;
   const memos = await listSalesCreditMemos(shiftDate(start, -buf), shiftDate(end, buf));
   const out = new Map<string, ScmInfo>();
@@ -285,16 +266,13 @@ async function fetchScmCustomerMap(
       m.invoiceId !== ZERO_GUID
         ? m.invoiceNumber
         : "";
-    out.set(m.number, {
-      customerName: m.customerName ?? "",
-      appliedToInvoice: linkedInvoice,
-    });
+    out.set(m.number, { customerName: m.customerName ?? "", appliedToInvoice: linkedInvoice });
   }
   return out;
 }
 
 // ---------------------------------------------------------------------------
-// Agreement addition snapshots (for price-increase vs upsell classification)
+// Agreement addition snapshots
 // ---------------------------------------------------------------------------
 
 type AdditionSnapshotEntry = {
@@ -317,7 +295,6 @@ function snapshotOnDate(
     const effActive = !eff || eff <= asOf;
     const notCancelled = !cancel || cancel >= asOf;
     if (!(effActive && notCancelled)) continue;
-
     const prodId = a.product?.identifier ?? "N/A";
     const subcat = productSubcat.get(prodId) ?? "";
     const existing = byProduct.get(prodId);
@@ -338,6 +315,7 @@ function snapshotOnDate(
 
 type LineItemBreakdown = {
   priceIncrease: number;
+  priceDecrease: number; // negative value (price went down, same qty)
   upsell: number;
   downsell: number;
   products: ProductChange[];
@@ -353,10 +331,14 @@ export type ProductChange = {
   priorTotal: number;
   currentTotal: number;
   change: number;
-  // The category this individual product-level delta falls into under the
-  // standard rules (pre-override). The line-level category the user sees may
-  // be an aggregated/overridden version of this.
-  category: "new_product" | "removed_product" | "price_increase" | "upsell" | "downsell" | "flat";
+  category:
+    | "new_product"
+    | "removed_product"
+    | "price_increase"
+    | "price_decrease"
+    | "upsell"
+    | "downsell"
+    | "flat";
 };
 
 async function classifyAgreementLineItems(
@@ -375,12 +357,7 @@ async function classifyAgreementLineItems(
     const additions = await listAgreementAdditions(agrId);
     const prior = snapshotOnDate(additions, priorDate, productSubcat);
     const current = snapshotOnDate(additions, currentDate, productSubcat);
-    const bd: LineItemBreakdown = {
-      priceIncrease: 0,
-      upsell: 0,
-      downsell: 0,
-      products: [],
-    };
+    const bd: LineItemBreakdown = { priceIncrease: 0, priceDecrease: 0, upsell: 0, downsell: 0, products: [] };
     const allProducts = new Set<string>([...prior.keys(), ...current.keys()]);
     for (const prod of allProducts) {
       const pri = prior.get(prod);
@@ -399,23 +376,31 @@ async function classifyAgreementLineItems(
         category: "flat",
       };
       if (cur && !pri) {
+        // Brand new product added to the agreement → upsell (new service)
         bd.upsell += cur.total;
         pc = { ...pc, category: "new_product" };
       } else if (pri && !cur) {
+        // Product removed from agreement
         bd.downsell -= pri.total;
         pc = { ...pc, category: "removed_product" };
       } else if (cur && pri) {
         const delta = cur.total - pri.total;
-        if (Math.abs(delta) < 0.005) {
-          // Flat — no movement; don't emit a product row.
-          continue;
-        }
+        if (Math.abs(delta) < 0.005) continue; // flat — skip
         const isCloud = CLOUD_SUBCATEGORIES.has(subcat);
         const sameQty = cur.quantity === pri.quantity;
         const priceUp = cur.unitPrice > pri.unitPrice;
         const priceDown = cur.unitPrice < pri.unitPrice;
+
         if (isCloud) {
-          if (delta > 0) {
+          // Cloud: qty changes mean seat add/remove; price-only changes are
+          // price increase/decrease even for cloud products.
+          if (sameQty && priceUp) {
+            bd.priceIncrease += delta;
+            pc = { ...pc, category: "price_increase" };
+          } else if (sameQty && priceDown) {
+            bd.priceDecrease += delta; // delta is negative
+            pc = { ...pc, category: "price_decrease" };
+          } else if (delta > 0) {
             bd.upsell += delta;
             pc = { ...pc, category: "upsell" };
           } else {
@@ -423,22 +408,25 @@ async function classifyAgreementLineItems(
             pc = { ...pc, category: "downsell" };
           }
         } else if (sameQty && priceUp) {
+          // Same quantity, unit price went up → price increase per Lyra definition
           bd.priceIncrease += delta;
           pc = { ...pc, category: "price_increase" };
         } else if (sameQty && priceDown) {
-          bd.downsell += delta;
-          pc = { ...pc, category: "downsell" };
+          // Same quantity, unit price went down → price decrease per Lyra definition
+          bd.priceDecrease += delta; // delta is negative
+          pc = { ...pc, category: "price_decrease" };
         } else if (delta > 0) {
+          // Quantity increased → upsell (existing client, more services/qty)
           bd.upsell += delta;
           pc = { ...pc, category: "upsell" };
         } else {
+          // Quantity decreased but client still has the agreement → downsell
           bd.downsell += delta;
           pc = { ...pc, category: "downsell" };
         }
       }
       bd.products.push(pc);
     }
-    // Largest absolute change first so the expanded view reads top-to-bottom.
     bd.products.sort((a, b) => Math.abs(b.change) - Math.abs(a.change));
     out.set(agrId, bd);
   }
@@ -450,7 +438,7 @@ async function classifyAgreementLineItems(
 // ---------------------------------------------------------------------------
 
 type TotalsResult = {
-  totals: Map<string, number>; // key = "company||agreement"
+  totals: Map<string, number>;
   agreementIds: Map<string, number | null>;
 };
 
@@ -464,8 +452,6 @@ function buildAgreementTotals(
     return { totals: new Map(), agreementIds: new Map() };
   }
 
-  // For deferred revenue journal entries (GJ-*) skip the offsetting invoice
-  // rows and only count the "Adjusting Deferred Charge" rows — prototype rule.
   const rowsByDoc = new Map<string, GlRow[]>();
   for (const r of glRows) {
     const arr = rowsByDoc.get(r.documentNumber);
@@ -476,9 +462,7 @@ function buildAgreementTotals(
   const filtered: GlRow[] = [];
   for (const [doc, rows] of rowsByDoc.entries()) {
     if (doc.startsWith("GJ-")) {
-      const hasDeferred = rows.some((r) =>
-        /Adjusting Deferred/i.test(r.description)
-      );
+      const hasDeferred = rows.some((r) => /Adjusting Deferred/i.test(r.description));
       if (hasDeferred) {
         for (const r of rows) {
           if (/Adjusting Deferred/i.test(r.description)) filtered.push(r);
@@ -491,18 +475,13 @@ function buildAgreementTotals(
     }
   }
 
-  // Canonical description per document:
-  //   - If any row has "Adjusting Deferred Charge", use that.
-  //   - Otherwise pick the row with the largest absolute net.
   const docDescriptions = new Map<string, string>();
   for (const [doc, rows] of rowsByDoc.entries()) {
     const deferred = rows.find((r) => /Adjusting Deferred/i.test(r.description));
     if (deferred) {
       docDescriptions.set(doc, deferred.description);
     } else {
-      const best = [...rows].sort(
-        (a, b) => Math.abs(b.net) - Math.abs(a.net)
-      )[0];
+      const best = [...rows].sort((a, b) => Math.abs(b.net) - Math.abs(a.net))[0];
       docDescriptions.set(doc, best?.description ?? "");
     }
   }
@@ -550,16 +529,10 @@ function buildAgreementTotals(
           ? cwMap.get(scm.appliedToInvoice)
           : undefined;
       if (linkedInvoiceInfo) {
-        // Credit memo was applied to a specific CW invoice — fold the credit
-        // into that invoice's agreement key so it appears as a reduction in
-        // the customer's regular agreement line instead of a standalone
-        // "Credit Memo Adjustment" line.
         company = linkedInvoiceInfo.company;
         agreement = linkedInvoiceInfo.agreement;
         agrId = linkedInvoiceInfo.agreementId;
       } else if (scm?.customerName) {
-        // Standalone credit memo — keep as customer-level adjustment so the
-        // customer rollup still captures it, but flag the agreement row.
         company = scm.customerName;
         agreement = "Credit Memo Adjustment";
       } else {
@@ -576,7 +549,6 @@ function buildAgreementTotals(
   return { totals, agreementIds };
 }
 
-/** Consolidate keys whose company name normalizes to the same base. */
 function consolidateTotals(t: TotalsResult): TotalsResult {
   const newTotals = new Map<string, number>();
   const newIds = new Map<string, number | null>();
@@ -590,10 +562,16 @@ function consolidateTotals(t: TotalsResult): TotalsResult {
 }
 
 /**
- * Roll up per-agreement bridge lines into per-customer rows. Uses the FULL
- * prior/current customer totals (including flat agreements not represented
- * as a BridgeLine) so the customer-level category reflects the customer's
- * true MRR state, not just the changed slice.
+ * Roll up per-agreement bridge lines into per-customer rows.
+ *
+ * Category precedence (most specific wins):
+ *  1. new_client  — customer had zero prior MRR and a new_client agreement
+ *  2. churn       — customer has zero current MRR and a churn agreement
+ *  3. price_increase — all agreements are price_increase
+ *  4. price_decrease — all agreements are price_decrease
+ *  5. price_increase by amount — net change ≈ sum of price-increase deltas
+ *  6. price_decrease by amount — net change ≈ sum of price-decrease deltas
+ *  7. upsell / downsell / flat — sign of net change
  */
 function groupByCustomer(
   lines: BridgeLine[],
@@ -612,39 +590,43 @@ function groupByCustomer(
     const priorMrr = round2(priorByCompany.get(company) ?? 0);
     const currentMrr = round2(currentByCompany.get(company) ?? 0);
     const change = round2(currentMrr - priorMrr);
-    // Derive customer category from the net position:
-    //  - if every underlying agreement is flagged new_client (by the line
-    //    classifier with 12mo lookback), inherit new_client
-    //  - all-churn agreements → churn
-    //  - all-price_increase → price_increase
-    //  - otherwise fall back to sign of net change
+
     let category: BridgeLineCategory = "flat";
     const cats = new Set(agreements.map((a) => a.category));
+
     if (priorMrr <= 0.005 && currentMrr > 0 && cats.has("new_client")) {
+      // Completely new logo — no prior MRR at all
       category = "new_client";
     } else if (currentMrr <= 0.005 && priorMrr > 0 && cats.has("churn")) {
+      // All services terminated
       category = "churn";
     } else if (cats.size === 1 && cats.has("price_increase")) {
       category = "price_increase";
+    } else if (cats.size === 1 && cats.has("price_decrease")) {
+      category = "price_decrease";
     } else {
-      // Price-increase net check: if the customer's net change is essentially
-      // all price-increase movement summed across their agreements, classify
-      // the customer as price_increase.
-      const totalPriceIncrease = agreements.reduce(
-        (s, a) => s + (a.priceIncreaseAmount ?? 0),
-        0
-      );
-      if (change > 0 && Math.abs(change - totalPriceIncrease) < 1 && totalPriceIncrease > 0) {
+      // Amount-based fallbacks: if essentially all the movement is
+      // price_increase or price_decrease, classify accordingly.
+      const totalPriceIncrease = agreements.reduce((s, a) => s + (a.priceIncreaseAmount ?? 0), 0);
+      const totalPriceDecrease = agreements.reduce((s, a) => s + (a.priceDecreaseAmount ?? 0), 0);
+
+      if (change > 0 && totalPriceIncrease > 0 && Math.abs(change - totalPriceIncrease) < 1) {
+        // Net positive movement explained entirely by price increases
         category = "price_increase";
+      } else if (change < 0 && totalPriceDecrease < 0 && Math.abs(change - totalPriceDecrease) < 1) {
+        // Net negative movement explained entirely by price decreases
+        category = "price_decrease";
       } else if (Math.abs(change) <= 0.005) {
         category = "flat";
       } else if (change > 0) {
+        // Positive net: existing client added services/qty
         category = "upsell";
       } else {
+        // Negative net: existing client dropped some services but not all
         category = "downsell";
       }
     }
-    // Sort agreements within a customer by magnitude (largest absolute first).
+
     agreements.sort((a, b) => Math.abs(b.change) - Math.abs(a.change));
     out.push({
       customerId: company,
@@ -656,7 +638,6 @@ function groupByCustomer(
       agreements,
     });
   }
-  // Largest swing first across customers.
   out.sort((a, b) => a.change - b.change);
   return out;
 }
@@ -670,28 +651,21 @@ async function fetchHistoricalCustomers(
   lookbackEnd: string
 ): Promise<Set<string>> {
   const out = new Set<string>();
-
-  // 1. BC sales invoices in the lookback window.
   const invoices = await listSalesInvoices(lookbackStart, lookbackEnd);
   for (const inv of invoices) {
     const n = (inv.customerName ?? "").trim();
     if (n) out.add(normalizeCompany(n));
   }
-
-  // 2. BC GL journal entries on MRR accounts — parse customer from description.
   const gl = await listGlEntriesRange(lookbackStart, lookbackEnd, MRR_ACCOUNTS);
   for (const e of gl) {
     if (!e.documentNumber?.startsWith("GJ-")) continue;
     const customer = extractJeCustomer(e.description ?? "");
     if (customer) out.add(normalizeCompany(customer));
   }
-
-  // 3. Any CW company counts as known.
   const cwNames = await listAllCompanyNames();
   for (const n of cwNames) {
     out.add(normalizeCompany(canonicalizeCustomer(n)));
   }
-
   return out;
 }
 
@@ -699,28 +673,18 @@ async function fetchHistoricalCustomers(
 // Bridge computation
 // ---------------------------------------------------------------------------
 
-export async function computeMrrBridge(
-  input: MrrBridgeInput
-): Promise<MrrBridgeResult> {
+export async function computeMrrBridge(input: MrrBridgeInput): Promise<MrrBridgeResult> {
   const {
-    priorStart,
-    priorEnd,
-    currentStart,
-    currentEnd,
+    priorStart, priorEnd, currentStart, currentEnd,
     priorSignedNotOnboarded = 0,
     skipHubspot = false,
   } = input;
 
-  // Pull everything in parallel where independent.
   const [
-    priorGl,
-    currentGl,
-    priorCwMap,
-    currentCwMap,
-    priorDgMap,
-    currentDgMap,
-    priorScmMap,
-    currentScmMap,
+    priorGl, currentGl,
+    priorCwMap, currentCwMap,
+    priorDgMap, currentDgMap,
+    priorScmMap, currentScmMap,
   ] = await Promise.all([
     fetchGlEntries(priorStart, priorEnd),
     fetchGlEntries(currentStart, currentEnd),
@@ -732,15 +696,8 @@ export async function computeMrrBridge(
     fetchScmCustomerMap(currentStart, currentEnd),
   ]);
 
-  const priorRaw = buildAgreementTotals(priorGl, priorCwMap, priorDgMap, priorScmMap);
-  const currentRaw = buildAgreementTotals(
-    currentGl,
-    currentCwMap,
-    currentDgMap,
-    currentScmMap
-  );
-  const prior = consolidateTotals(priorRaw);
-  const current = consolidateTotals(currentRaw);
+  const prior = consolidateTotals(buildAgreementTotals(priorGl, priorCwMap, priorDgMap, priorScmMap));
+  const current = consolidateTotals(buildAgreementTotals(currentGl, currentCwMap, currentDgMap, currentScmMap));
 
   // Build bridge lines for keys where the amount changed.
   const allKeys = new Set<string>([...prior.totals.keys(), ...current.totals.keys()]);
@@ -751,26 +708,19 @@ export async function computeMrrBridge(
     if (Math.abs(currentVal - priorVal) <= 0.005) continue;
     const [company, agreement] = key.split("||");
     const change = round2(currentVal - priorVal);
+
+    // Initial classification — refined below after customer totals and
+    // product-level breakdown are available.
     let category: BridgeLineCategory = "flat";
     if (priorVal === 0 && currentVal > 0) category = "new_client";
     else if (change > 0) category = "upsell";
     else if (change < 0) category = "downsell";
-    const agreementId =
-      current.agreementIds.get(key) ?? prior.agreementIds.get(key) ?? null;
-    lines.push({
-      rowId: `${company}||${agreement}`,
-      company,
-      agreement,
-      agreementId,
-      priorMrr: priorVal,
-      currentMrr: currentVal,
-      change,
-      category,
-    });
+
+    const agreementId = current.agreementIds.get(key) ?? prior.agreementIds.get(key) ?? null;
+    lines.push({ rowId: `${company}||${agreement}`, company, agreement, agreementId, priorMrr: priorVal, currentMrr: currentVal, change, category });
   }
 
-  // Customer-level classification overrides — churn only when total customer MRR
-  // drops to 0; new_client only when total was 0 before.
+  // Customer-level totals for churn / new_client refinement.
   const priorByCompany = new Map<string, number>();
   const currentByCompany = new Map<string, number>();
   for (const [key, val] of prior.totals.entries()) {
@@ -781,18 +731,20 @@ export async function computeMrrBridge(
     const company = key.split("||")[0];
     currentByCompany.set(company, (currentByCompany.get(company) ?? 0) + val);
   }
+
   for (const line of lines) {
     const priorCust = priorByCompany.get(line.company) ?? 0;
     const currentCust = currentByCompany.get(line.company) ?? 0;
     if (line.priorMrr > 0 && line.currentMrr === 0) {
+      // Agreement went to zero — churn only if entire customer went to zero
       line.category = currentCust > 0 ? "downsell" : "churn";
     } else if (line.priorMrr === 0 && line.currentMrr > 0) {
+      // Agreement appeared — new_client only if customer was completely new
       line.category = priorCust > 0 ? "upsell" : "new_client";
     }
   }
 
-  // 12-month lookback: flip provisional new_client to upsell if the customer
-  // existed historically (BC sales invoice, JE description, or CW company).
+  // 12-month lookback: flip provisional new_client → upsell if customer existed.
   const provisionalNewClients = lines.filter((l) => l.category === "new_client");
   if (provisionalNewClients.length > 0) {
     const lookbackStart = shiftDate(priorStart, -365);
@@ -804,58 +756,71 @@ export async function computeMrrBridge(
     }
   }
 
-  // Line-item analysis on every agreement-backed line (new_client / churn /
-  // upsell / downsell) — we need the per-product detail for the expand view
-  // on all of them, and the price_increase preset is only meaningful for
-  // upsell candidates but is cheap to evaluate for every line.
+  // Product-level breakdown for all agreement-backed lines. Drives:
+  //   • expand view product detail
+  //   • price_increase vs upsell preset
+  //   • price_decrease vs downsell preset
   const agrIdsToCheck = new Set<number>();
   for (const l of lines) {
     if (l.agreementId != null) agrIdsToCheck.add(l.agreementId);
   }
   if (agrIdsToCheck.size > 0) {
-    const breakdowns = await classifyAgreementLineItems(
-      agrIdsToCheck,
-      priorEnd,
-      currentEnd
-    );
+    const breakdowns = await classifyAgreementLineItems(agrIdsToCheck, priorEnd, currentEnd);
     for (const l of lines) {
       if (l.agreementId == null) continue;
       const bd = breakdowns.get(l.agreementId);
       if (!bd) continue;
       l.products = bd.products;
       l.priceIncreaseAmount = round2(bd.priceIncrease);
-      // Preset to price_increase if the agreement's net change is essentially
-      // all price-increase movement (within $1 of total).
-      const totalAbs =
-        Math.abs(bd.priceIncrease) + Math.abs(bd.upsell) + Math.abs(bd.downsell);
+      l.priceDecreaseAmount = round2(bd.priceDecrease); // negative
+
+      const totalAbs = Math.abs(bd.priceIncrease) + Math.abs(bd.priceDecrease) + Math.abs(bd.upsell) + Math.abs(bd.downsell);
+
       if (
         l.category === "upsell" &&
         bd.priceIncrease > 0 &&
-        Math.abs(totalAbs - bd.priceIncrease) < 1
+        Math.abs(totalAbs - Math.abs(bd.priceIncrease)) < 1
       ) {
+        // Agreement's entire positive movement is price-only (same qty, price up)
         l.category = "price_increase";
+      } else if (
+        l.category === "downsell" &&
+        bd.priceDecrease < 0 &&
+        Math.abs(totalAbs - Math.abs(bd.priceDecrease)) < 1
+      ) {
+        // Agreement's entire negative movement is price-only (same qty, price down)
+        // Per Lyra definition: price decrease to existing client
+        l.category = "price_decrease";
       }
     }
   }
 
   lines.sort((a, b) => a.change - b.change);
 
-  // Group agreement lines by customer so offsetting agreements (e.g. a credit
-  // memo on one "agreement key" + normal billing on another) net at the
-  // customer level instead of appearing as separate upsell + downsell swings.
   const customers = groupByCustomer(lines, priorByCompany, currentByCompany);
 
-  // Summary totals: straight sum over CUSTOMER-level categories. User edits
-  // on the client flow through this same sum-by-category.
+  // Summary totals over customer-level categories.
   const beginningMrr = round2([...prior.totals.values()].reduce((s, v) => s + v, 0));
   const endingMrr = round2([...current.totals.values()].reduce((s, v) => s + v, 0));
   const sumCustomers = (cat: BridgeLineCategory) =>
     customers.filter((c) => c.category === cat).reduce((s, c) => s + c.change, 0);
+
   const newClients = sumCustomers("new_client");
   const priceIncrease = sumCustomers("price_increase");
   const upsell = sumCustomers("upsell");
-  const downsell = sumCustomers("downsell");
-  const churn = sumCustomers("churn");
+  const priceDecrease = sumCustomers("price_decrease"); // negative
+  const downsell = sumCustomers("downsell"); // negative
+  const churn = sumCustomers("churn"); // negative
+
+  // Retention calculations per standard MSP definitions:
+  // Net MRR retention includes all existing-customer movements (price Δ + qty Δ + churn)
+  // Gross MRR retention excludes upsells/price-increases (only subtractions from base)
+  const netRetained = beginningMrr + upsell + priceIncrease + priceDecrease + downsell + churn;
+  const netMrrRetentionPct = beginningMrr === 0 ? 0 : round2((netRetained / beginningMrr) * 100);
+  const grossRetained = beginningMrr + priceDecrease + downsell + churn;
+  const grossMrrRetentionPct = beginningMrr === 0 ? 0 : round2((grossRetained / beginningMrr) * 100);
+  const netChange = round2(endingMrr - beginningMrr);
+  const mrrGrowthPct = beginningMrr === 0 ? 0 : round2((netChange / beginningMrr) * 100);
 
   // HubSpot signed-not-onboarded.
   let signedDeals: SignedDeal[] = [];
@@ -870,18 +835,11 @@ export async function computeMrrBridge(
       }
       for (const deal of deals) {
         const dealName = deal.properties.dealname ?? "";
-        const company = dealName.includes("-")
-          ? dealName.split("-")[0].trim()
-          : dealName.trim();
+        const company = dealName.includes("-") ? dealName.split("-")[0].trim() : dealName.trim();
         if (cwLowerNames.has(company.toLowerCase())) continue;
         const mrr = await calculateDealMrr(deal);
         if (mrr > 0) {
-          signedDeals.push({
-            dealName,
-            company,
-            mrr: round2(mrr),
-            closeDate: (deal.properties.closedate ?? "").slice(0, 10),
-          });
+          signedDeals.push({ dealName, company, mrr: round2(mrr), closeDate: (deal.properties.closedate ?? "").slice(0, 10) });
         }
       }
       newSigned = signedDeals.reduce((s, d) => s + d.mrr, 0);
@@ -892,38 +850,25 @@ export async function computeMrrBridge(
     }
   }
 
-  const netChange = round2(endingMrr - beginningMrr);
-  const mrrGrowthPct = beginningMrr === 0 ? 0 : round2((netChange / beginningMrr) * 100);
-  // Net retention: (Beginning + upsell + priceIncrease + downsell + churn) / Beginning.
-  // Downsell + churn are already negative sums, so we add (not subtract).
-  const netRetained = beginningMrr + upsell + priceIncrease + downsell + churn;
-  const netMrrRetentionPct =
-    beginningMrr === 0 ? 0 : round2((netRetained / beginningMrr) * 100);
-  const grossRetained = beginningMrr + downsell + churn;
-  const grossMrrRetentionPct =
-    beginningMrr === 0 ? 0 : round2((grossRetained / beginningMrr) * 100);
   const endingSigned = round2(priorSignedNotOnboarded + newSigned);
 
   return {
     priorPeriod: monthLabel(priorStart),
     currentPeriod: monthLabel(currentStart),
-    priorStart,
-    priorEnd,
-    currentStart,
-    currentEnd,
+    priorStart, priorEnd, currentStart, currentEnd,
     beginningMrr,
     endingMrr,
     endingArr: round2(endingMrr * 12),
     newMrrNewClients: round2(newClients),
-    newMrrPriceIncrease: priceIncrease,
-    newMrrUpsell: upsell,
-    lostMrrDownsell: round2(downsell),
+    newMrrPriceIncrease: round2(priceIncrease),
+    newMrrUpsell: round2(upsell),
+    lostMrrDownsell: round2(downsell + priceDecrease), // combined for legacy callers
     lostMrrChurn: round2(churn),
     netChange,
     mrrGrowthPct,
     netMrrRetentionPct,
     grossMrrRetentionPct,
-    grossMrrChurn: round2(downsell + churn),
+    grossMrrChurn: round2(priceDecrease + downsell + churn),
     beginningSignedNotOnboarded: round2(priorSignedNotOnboarded),
     newSignedNotOnboarded: round2(newSigned),
     lessOnboarded: 0,

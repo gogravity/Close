@@ -102,7 +102,7 @@ async function postPayment(creds, invoiceId, amount, paymentDate) {
   });
 }
 
-async function patchPayment(creds, invoiceId, paymentId, amount, paymentDate) {
+async function patchPayment(creds, invoiceId, paymentId, amount) {
   const base = cwBase(creds);
   const headers = makeCwHeaders(creds);
   return cwFetch(`${base}/finance/invoices/${invoiceId}/payments/${paymentId}`, {
@@ -110,7 +110,6 @@ async function patchPayment(creds, invoiceId, paymentId, amount, paymentDate) {
     headers,
     body: JSON.stringify([
       { op: "replace", path: "amount", value: amount },
-      { op: "replace", path: "paymentDate", value: paymentDate },
     ]),
   });
 }
@@ -245,10 +244,10 @@ async function main() {
         console.log(`  ✅ POST  ${inv.invoiceNumber.padEnd(20)} ${(inv.company?.name ?? "").padEnd(35)} $${balance.toFixed(2)}`);
         applied++;
       } else {
-        // Patch existing payment to cover full balance
-        const existingPayment = existing[0];
-        const newAmount = existingPayment.amount + balance;
-        await patchPayment(cwCreds, inv.id, existingPayment.id, newAmount, paymentDate);
+        // Prefer patching a type "P" payment; fall back to first record
+        const existingPayment = existing.find((p) => p.type === "P") ?? existing[0];
+        const newAmount = Math.round((existingPayment.amount + balance) * 100) / 100;
+        await patchPayment(cwCreds, inv.id, existingPayment.id, newAmount);
         console.log(`  🔄 PATCH ${inv.invoiceNumber.padEnd(20)} ${(inv.company?.name ?? "").padEnd(35)} $${balance.toFixed(2)} (existing pmt updated)`);
         patched++;
       }

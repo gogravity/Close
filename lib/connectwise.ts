@@ -655,12 +655,11 @@ export async function applyPaymentToCwInvoice(
       paymentDate,
     });
   } else {
-    // PATCH the existing payment to cover the full remaining balance
-    const p = existing[0];
-    const newAmount = p.amount + balance;
+    // Prefer patching a type "P" payment; credits ("C") are capped at the credit invoice amount
+    const p = existing.find((pmt) => pmt.type === "P") ?? existing[0];
+    const newAmount = Math.round((p.amount + balance) * 100) / 100;
     await cwPatch(`/finance/invoices/${invoiceId}/payments/${p.id}`, [
       { op: "replace", path: "amount", value: newAmount },
-      { op: "replace", path: "paymentDate", value: paymentDate },
     ]);
   }
 }

@@ -16,20 +16,20 @@ export default function DataPrepNav() {
 
   return (
     <>
-      <div className="mt-4 px-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+      <div className="pb-1 px-3 text-[9px] font-semibold uppercase tracking-widest text-slate-500">
         Data Preparation
       </div>
-      <ul className="mt-1 space-y-0.5">
+      <ul className="space-y-0.5">
         {ITEMS.map((item) => {
           const isActive = pathname.startsWith(item.href);
           return (
             <li key={item.href}>
               <Link
                 href={item.href}
-                className={`block rounded py-1.5 pl-6 pr-3 text-sm ${
+                className={`block rounded py-1.5 pl-6 pr-3 text-sm transition-colors ${
                   isActive
-                    ? "bg-slate-200 font-medium text-slate-900"
-                    : "text-slate-700 hover:bg-slate-200 hover:text-slate-900"
+                    ? "bg-white/10 text-white font-medium"
+                    : "text-slate-300 hover:bg-white/[0.06] hover:text-white"
                 }`}
               >
                 {item.label}

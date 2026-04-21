@@ -1,14 +1,3 @@
-/**
- * MetricCard — shared stat/KPI box used across the dashboard, data-prep
- * tools, and plan page. Replaces the local Stat, Panel, and StatPill
- * components that each had slightly different styling.
- *
- * Usage:
- *   <MetricCard label="Total Assets" value={fmt(total)} />
- *   <MetricCard label="Discrepancies" value="3" tone="warn" />
- *   <MetricCard label="Automatable" value={12} tone="ok" />
- */
-
 type Tone = "neutral" | "ok" | "warn";
 
 type Props = {
@@ -17,33 +6,31 @@ type Props = {
   tone?: Tone;
 };
 
-const toneClasses: Record<Tone, { border: string; value: string; bg: string }> = {
-  neutral: {
-    border: "border-slate-200",
-    value: "text-slate-900",
-    bg: "bg-white",
-  },
-  ok: {
-    border: "border-emerald-200",
-    value: "text-emerald-700",
-    bg: "bg-emerald-50/40",
-  },
-  warn: {
-    border: "border-amber-200",
-    value: "text-amber-700",
-    bg: "bg-amber-50/40",
-  },
-};
-
 export default function MetricCard({ label, value, tone = "neutral" }: Props) {
-  const { border, value: valueCls, bg } = toneClasses[tone];
+  const accentBar =
+    tone === "ok"
+      ? "bg-emerald-500"
+      : tone === "warn"
+        ? "bg-amber-500"
+        : "bg-transparent";
+
+  const valueColor =
+    tone === "ok"
+      ? "text-emerald-600"
+      : tone === "warn"
+        ? "text-amber-600"
+        : "text-slate-900";
+
   return (
-    <div className={`rounded border px-4 py-3 ${border} ${bg}`}>
-      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
-        {label}
-      </div>
-      <div className={`mt-1 text-xl font-semibold tabular-nums ${valueCls}`}>
-        {value}
+    <div className="relative overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+      <div className={`absolute inset-y-0 left-0 w-[3px] ${accentBar}`} />
+      <div className="px-4 py-3 pl-5">
+        <div className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">
+          {label}
+        </div>
+        <div className={`mt-1.5 text-xl font-semibold tabular-nums leading-none ${valueColor}`}>
+          {value}
+        </div>
       </div>
     </div>
   );

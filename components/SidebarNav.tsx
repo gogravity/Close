@@ -27,14 +27,13 @@ export default function SidebarNav({ sections }: Props) {
 
   const [open, setOpen] = useState<Record<string, boolean>>({});
 
-  // Auto-open the section matching the current route.
   useEffect(() => {
     const match = sections.find((s) => pathname === `/section/${s.slug}`);
     if (match) setOpen((p) => ({ ...p, [match.slug]: true }));
   }, [pathname, sections]);
 
   return (
-    <ul className="mt-1 space-y-0.5">
+    <ul className="space-y-0.5">
       {sections.map((s) => {
         const isActive = pathname === `/section/${s.slug}`;
         const isOpen = open[s.slug] ?? false;
@@ -45,8 +44,8 @@ export default function SidebarNav({ sections }: Props) {
               <button
                 type="button"
                 onClick={() => setOpen((p) => ({ ...p, [s.slug]: !isOpen }))}
-                className={`flex h-7 w-5 shrink-0 items-center justify-center rounded text-[10px] text-slate-400 hover:bg-slate-200 hover:text-slate-600 ${
-                  hasChildren ? "" : "opacity-30 cursor-default"
+                className={`flex h-7 w-5 shrink-0 items-center justify-center rounded text-[10px] text-slate-600 hover:text-slate-300 transition-colors ${
+                  hasChildren ? "" : "opacity-0 pointer-events-none"
                 }`}
                 aria-label={isOpen ? "Collapse" : "Expand"}
                 disabled={!hasChildren}
@@ -55,31 +54,31 @@ export default function SidebarNav({ sections }: Props) {
               </button>
               <Link
                 href={`/section/${s.slug}`}
-                className={`flex-1 rounded px-2 py-1.5 text-sm ${
+                className={`flex-1 rounded px-2 py-1.5 text-sm transition-colors ${
                   isActive && !activeAccount
-                    ? "bg-slate-200 font-medium text-slate-900"
-                    : "text-slate-700 hover:bg-slate-200 hover:text-slate-900"
+                    ? "bg-white/10 font-medium text-white"
+                    : "text-slate-300 hover:bg-white/[0.06] hover:text-white"
                 }`}
               >
-                <span className="inline-block w-6 text-slate-400 tabular-nums">{s.order}.</span>
+                <span className="inline-block w-5 text-slate-600 tabular-nums text-xs">{s.order}.</span>
                 {s.title}
               </Link>
             </div>
             {isOpen && hasChildren && (
-              <ul className="ml-[26px] mt-0.5 space-y-0.5 border-l border-slate-200 pl-2">
+              <ul className="ml-[26px] mt-0.5 space-y-0.5 border-l border-slate-800 pl-2">
                 {s.subTabs.map((t) => {
                   const subActive = isActive && activeAccount === t.accountNumber;
                   return (
                     <li key={t.accountNumber}>
                       <Link
                         href={`/section/${s.slug}?account=${t.accountNumber}`}
-                        className={`flex items-start gap-2 rounded px-2 py-1 text-xs ${
+                        className={`flex items-start gap-2 rounded px-2 py-1 text-xs transition-colors ${
                           subActive
-                            ? "bg-slate-200 font-medium text-slate-900"
-                            : "text-slate-600 hover:bg-slate-200 hover:text-slate-900"
+                            ? "bg-white/10 font-medium text-white"
+                            : "text-slate-400 hover:bg-white/[0.06] hover:text-white"
                         }`}
                       >
-                        <span className="font-mono text-[10px] text-slate-400 pt-0.5">
+                        <span className="font-mono text-[10px] text-slate-600 pt-0.5">
                           {t.accountNumber}
                         </span>
                         <span className="flex-1 truncate">{t.accountName}</span>

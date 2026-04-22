@@ -11,6 +11,7 @@ const ITEMS: Item[] = [
   { href: "/data-prep/pl-comparison", label: "P&L Comparison" },
   { href: "/data-prep/payroll", label: "Payroll" },
   { href: "/data-prep/expense-checklist", label: "Expense Checklist" },
+  { href: "/data-prep/pax8",             label: "Pax8 Bill" },
 ];
 
 export default function DataPrepNav() {

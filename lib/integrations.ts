@@ -8,7 +8,7 @@ export type IntegrationField = {
   help?: string;
 };
 
-export type IntegrationCategory = "gl" | "psa" | "payroll" | "spend" | "ai" | "crm";
+export type IntegrationCategory = "gl" | "psa" | "payroll" | "spend" | "ai" | "crm" | "distributor" | "security";
 
 export type Integration = {
   id: string;
@@ -108,6 +108,29 @@ export const integrations: Integration[] = [
     ],
   },
   {
+    id: "pax8",
+    name: "Pax8",
+    category: "distributor",
+    blurb:
+      "Cloud distribution platform. Pulls monthly invoices, line items, and active subscriptions for billing reconciliation and per-client cost breakdown.",
+    docsUrl: "https://developer.pax8.com/",
+    fields: [
+      { key: "clientId",     label: "Client ID",     type: "secret", help: "OAuth2 client ID from the Pax8 Developer Portal" },
+      { key: "clientSecret", label: "Client Secret", type: "secret", help: "OAuth2 client secret from the Pax8 Developer Portal" },
+    ],
+  },
+  {
+    id: "ironscales",
+    name: "Ironscales",
+    category: "security",
+    blurb:
+      "AI-powered email security. Pulls per-company mailbox counts and plan types for seat reconciliation against Pax8 billing.",
+    docsUrl: "https://ironscales.com/",
+    fields: [
+      { key: "apiKey", label: "API Key", type: "secret", help: "Partner API key from the Ironscales partner portal" },
+    ],
+  },
+  {
     id: "anthropic",
     name: "Anthropic API",
     category: "ai",
@@ -140,6 +163,8 @@ export const categoryLabels: Record<IntegrationCategory, string> = {
   spend: "Spend Management",
   crm: "CRM",
   ai: "AI",
+  distributor: "Distribution",
+  security: "Security",
 };
 
 export function getIntegration(id: string): Integration | undefined {

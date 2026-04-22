@@ -39,15 +39,52 @@ export type VerifiedVendor = RecurringVendor & {
   }[];
 };
 
+/** A vendor seen in the verification month but absent from the lookback history. */
+export type PossiblyNewVendor = {
+  vendor: string;
+  invoices: {
+    invoiceNumber: string;
+    vendorName: string;
+    invoiceDate: string;
+    amount: number;
+    bcStatus: string;
+  }[];
+  totalAmount: number;
+};
+
+/**
+ * Classify frequency based on how many of the most-recent 6 months in the
+ * lookback window the vendor appeared in. Using the last 6 months as the
+ * reference window keeps labels stable regardless of how far back the
+ * lookback extends.
+ */
+function classifyFrequency(
+  seenInMonths: string[],
+  lookbackEndYM: string // YYYY-MM of last month in lookback
+): RecurringFrequency {
+  // Build the last 6 months preceding (and including) lookbackEndYM
+  const [ey, em] = lookbackEndYM.split("-").map(Number);
+  const last6 = new Set<string>();
+  for (let i = 0; i < 6; i++) {
+    const d = new Date(Date.UTC(ey, em - 1 - i, 1));
+    last6.add(d.toISOString().slice(0, 7));
+  }
+  const recentCount = seenInMonths.filter((ym) => last6.has(ym)).length;
+
+  if (recentCount >= 5) return "monthly";
+  if (recentCount >= 3) return "frequent";
+  if (seenInMonths.length >= 2) return "quarterly";
+  return "occasional";
+}
+
 /**
  * From a flat list of invoices, detect vendors with recurring patterns.
  *
- * @param invoices  All invoices in the lookback window (NOT including the
- *                  verification month itself).
- * @param lookbackMonths  Number of calendar months in the window (for ratio
- *                        calculations). Pass the actual count, not inferred.
- * @param minMonths  Minimum months a vendor must appear to be considered
- *                   recurring (default 2).
+ * @param invoices       All invoices in the lookback window (NOT the verification month).
+ * @param lookbackMonths Number of calendar months in the window.
+ * @param lookbackEndYM  The last month of the lookback window (YYYY-MM), used for
+ *                       frequency classification.
+ * @param minMonths      Minimum distinct months a vendor must appear in (default 2).
  */
 export function detectRecurringVendors(
   invoices: {
@@ -56,25 +93,22 @@ export function detectRecurringVendors(
     totalAmountIncludingTax: number;
   }[],
   lookbackMonths: number,
+  lookbackEndYM: string,
   minMonths = 2
 ): RecurringVendor[] {
-  // Aggregate per vendor → month
-  const byVendor = new Map<
-    string,
-    { months: Map<string, number>; days: number[] }
-  >();
+  const byVendor = new Map<string, { months: Map<string, number>; days: number[] }>();
 
   for (const inv of invoices) {
-    const ym = inv.invoiceDate.slice(0, 7);
-    const day = parseInt(inv.invoiceDate.slice(8, 10), 10);
+    const ym = inv.invoiceDate?.slice(0, 7);
+    const day = parseInt(inv.invoiceDate?.slice(8, 10) ?? "0", 10);
     const amount = inv.totalAmountIncludingTax ?? 0;
     const vendor = inv.vendorName?.trim();
-    if (!vendor || !ym) continue;
+    if (!vendor || !ym || ym.length < 7) continue;
 
     if (!byVendor.has(vendor)) byVendor.set(vendor, { months: new Map(), days: [] });
     const d = byVendor.get(vendor)!;
     d.months.set(ym, (d.months.get(ym) ?? 0) + amount);
-    d.days.push(day);
+    if (day > 0) d.days.push(day);
   }
 
   const results: RecurringVendor[] = [];
@@ -83,29 +117,19 @@ export function detectRecurringVendors(
     const monthsPresent = months.size;
     if (monthsPresent < minMonths) continue;
 
-    const ratio = monthsPresent / lookbackMonths;
-    let frequency: RecurringFrequency;
-    if (ratio >= 0.75) frequency = "monthly";
-    else if (ratio >= 0.45) frequency = "frequent";
-    else if (ratio >= 0.2) frequency = "quarterly";
-    else frequency = "occasional";
-
     const seenInMonths = [...months.keys()].sort();
+    const frequency = classifyFrequency(seenInMonths, lookbackEndYM);
+
     const totalAmount = [...months.values()].reduce((s, v) => s + v, 0);
     const avgMonthlyAmount = totalAmount / monthsPresent;
 
-    // Median day of month
     const sortedDays = [...days].sort((a, b) => a - b);
-    const medDay = sortedDays[Math.floor(sortedDays.length / 2)];
-    // Only report a typical day if the spread is tight (±7 days)
-    const spread = sortedDays[sortedDays.length - 1] - sortedDays[0];
-    const typicalDay = spread <= 14 ? medDay : null;
+    const medDay = sortedDays.length > 0 ? sortedDays[Math.floor(sortedDays.length / 2)] : null;
+    const spread = sortedDays.length > 1
+      ? sortedDays[sortedDays.length - 1] - sortedDays[0]
+      : 0;
+    const typicalDay = medDay !== null && spread <= 14 ? medDay : null;
 
-    // Determine if expected this month: monthly/frequent → always yes.
-    // Quarterly/occasional → yes only if the verification month number
-    // matches one of the months they appeared in (mod-3 or mod-6 check).
-    // We compute this later when we have the verification month; for now mark
-    // monthly/frequent as always expected.
     const expectedThisMonth = frequency === "monthly" || frequency === "frequent";
 
     results.push({
@@ -120,7 +144,6 @@ export function detectRecurringVendors(
     });
   }
 
-  // Sort: most-frequent first, then by avg amount descending
   return results.sort((a, b) => {
     if (b.monthsPresent !== a.monthsPresent) return b.monthsPresent - a.monthsPresent;
     return b.avgMonthlyAmount - a.avgMonthlyAmount;
@@ -128,11 +151,9 @@ export function detectRecurringVendors(
 }
 
 /**
- * Given detected recurring vendors and the invoices for the verification
- * month, cross-reference to produce a "verified" list with status.
- *
- * Also refines `expectedThisMonth` for quarterly/occasional vendors by
- * checking if the verification month number matches their historical pattern.
+ * Cross-reference detected recurring vendors against the current month's invoices.
+ * Also returns vendors that appear in the current month but had no lookback history
+ * (possibly new recurring expenses).
  */
 export function crossReferenceMonth(
   recurring: RecurringVendor[],
@@ -143,9 +164,11 @@ export function crossReferenceMonth(
     totalAmountIncludingTax: number;
     status: string;
   }[],
-  verifyMonth: number // 1-12
-): VerifiedVendor[] {
-  // Build vendor → current-month invoices lookup (case-insensitive)
+  verifyMonth: number
+): { verified: VerifiedVendor[]; possiblyNew: PossiblyNewVendor[] } {
+  const knownVendors = new Set(recurring.map((r) => r.vendor.toLowerCase()));
+
+  // Build lookup: vendorKey → current-month invoices
   const currentByVendor = new Map<string, typeof currentMonthInvoices>();
   for (const inv of currentMonthInvoices) {
     const key = inv.vendorName?.trim().toLowerCase() ?? "";
@@ -153,29 +176,20 @@ export function crossReferenceMonth(
     currentByVendor.get(key)!.push(inv);
   }
 
-  return recurring.map((r): VerifiedVendor => {
-    // Refine expectedThisMonth for quarterly/occasional
+  const verified: VerifiedVendor[] = recurring.map((r) => {
     let expectedThisMonth = r.expectedThisMonth;
     if (!expectedThisMonth) {
-      // Check if any of the months they historically appeared in share the
-      // same remainder mod 3 (quarterly) or mod 6 (semi-annual)
       const seenMonthNums = r.seenInMonths.map((ym) => parseInt(ym.slice(5, 7), 10));
       if (r.frequency === "quarterly") {
         expectedThisMonth = seenMonthNums.some((m) => m % 3 === verifyMonth % 3);
-      } else {
-        // occasional — show but don't expect
-        expectedThisMonth = false;
       }
     }
 
-    const key = r.vendor.toLowerCase();
-    const matches = currentByVendor.get(key) ?? [];
-    const found = matches.length > 0;
-
+    const matches = currentByVendor.get(r.vendor.toLowerCase()) ?? [];
     return {
       ...r,
       expectedThisMonth,
-      status: found ? "found" : "absent",
+      status: matches.length > 0 ? "found" : "absent",
       currentMonthInvoices: matches.map((inv) => ({
         invoiceNumber: inv.invoiceNumber,
         vendorName: inv.vendorName,
@@ -185,6 +199,26 @@ export function crossReferenceMonth(
       })),
     };
   });
+
+  // Vendors in the current month that weren't in the lookback at all
+  const possiblyNew: PossiblyNewVendor[] = [];
+  for (const [key, invs] of currentByVendor) {
+    if (knownVendors.has(key)) continue;
+    possiblyNew.push({
+      vendor: invs[0].vendorName,
+      invoices: invs.map((inv) => ({
+        invoiceNumber: inv.invoiceNumber,
+        vendorName: inv.vendorName,
+        invoiceDate: inv.invoiceDate,
+        amount: inv.totalAmountIncludingTax,
+        bcStatus: inv.status,
+      })),
+      totalAmount: invs.reduce((s, i) => s + i.totalAmountIncludingTax, 0),
+    });
+  }
+  possiblyNew.sort((a, b) => b.totalAmount - a.totalAmount);
+
+  return { verified, possiblyNew };
 }
 
 /** Build the YYYY-MM-DD start and end dates for a given year/month. */

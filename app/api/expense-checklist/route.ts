@@ -6,6 +6,7 @@ import {
   monthBounds,
   subtractMonths,
   type VerifiedVendor,
+  type PossiblyNewVendor,
 } from "@/lib/recurringExpenses";
 
 export const dynamic = "force-dynamic";
@@ -17,11 +18,15 @@ export type ChecklistResponse = {
   periodLabel: string;
   lookbackMonths: number;
   lookbackStart: string;
+  /** Last month of lookback window (YYYY-MM), for dot alignment in UI */
+  lookbackEndYM: string;
   totalTracked: number;
   found: number;
   absentExpected: number;
   absentNotExpected: number;
   vendors: VerifiedVendor[];
+  /** Vendors appearing in the verification month but absent from lookback history */
+  possiblyNew: PossiblyNewVendor[];
 };
 
 export type ChecklistErrorResponse = {
@@ -32,14 +37,16 @@ export type ChecklistErrorResponse = {
 export async function GET(request: Request): Promise<NextResponse> {
   const { searchParams } = new URL(request.url);
 
-  const yearParam = searchParams.get("year");
-  const monthParam = searchParams.get("month");
+  const yearParam    = searchParams.get("year");
+  const monthParam   = searchParams.get("month");
   const lookbackParam = searchParams.get("lookback");
 
-  const now = new Date();
-  const year = yearParam ? parseInt(yearParam, 10) : now.getUTCFullYear();
+  const now   = new Date();
+  const year  = yearParam  ? parseInt(yearParam, 10)  : now.getUTCFullYear();
   const month = monthParam ? parseInt(monthParam, 10) : now.getUTCMonth() + 1;
-  const lookbackMonths = lookbackParam ? Math.min(parseInt(lookbackParam, 10), 24) : 6;
+  const lookbackMonths = lookbackParam
+    ? Math.min(parseInt(lookbackParam, 10), 24)
+    : 6;
 
   if (isNaN(year) || isNaN(month) || month < 1 || month > 12) {
     return NextResponse.json<ChecklistErrorResponse>(
@@ -49,47 +56,47 @@ export async function GET(request: Request): Promise<NextResponse> {
   }
 
   const periodLabel = new Date(Date.UTC(year, month - 1, 1)).toLocaleString("en-US", {
-    month: "long",
-    year: "numeric",
-    timeZone: "UTC",
+    month: "long", year: "numeric", timeZone: "UTC",
   });
 
   try {
-    // ── Lookback window ────────────────────────────────────────────────────────
-    // Fetch the N months immediately before the verification month.
-    const lookbackEnd = subtractMonths(year, month, 1);
-    const lookbackStart = subtractMonths(year, month, lookbackMonths);
+    // Lookback window: N months immediately before the verification month
+    const lookbackEndMY  = subtractMonths(year, month, 1);
+    const lookbackStartMY = subtractMonths(year, month, lookbackMonths);
 
-    const lbStartBounds = monthBounds(lookbackStart.year, lookbackStart.month);
-    const lbEndBounds = monthBounds(lookbackEnd.year, lookbackEnd.month);
+    const lbStart = monthBounds(lookbackStartMY.year, lookbackStartMY.month);
+    const lbEnd   = monthBounds(lookbackEndMY.year,   lookbackEndMY.month);
+    const verify  = monthBounds(year, month);
 
-    // ── Verification month ─────────────────────────────────────────────────────
-    const verifyBounds = monthBounds(year, month);
+    const lookbackEndYM =
+      `${String(lookbackEndMY.year)}-${String(lookbackEndMY.month).padStart(2, "0")}`;
 
-    // Fetch both ranges in parallel
+    // Fetch lookback + verification month in parallel
     const [lookbackInvoices, currentInvoices] = await Promise.all([
-      listPurchaseInvoicesRange(lbStartBounds.start, lbEndBounds.end),
-      listPurchaseInvoicesRange(verifyBounds.start, verifyBounds.end),
+      listPurchaseInvoicesRange(lbStart.start, lbEnd.end),
+      listPurchaseInvoicesRange(verify.start, verify.end),
     ]);
 
-    // ── Pattern detection ──────────────────────────────────────────────────────
-    const recurring = detectRecurringVendors(lookbackInvoices, lookbackMonths, 2);
+    const recurring = detectRecurringVendors(
+      lookbackInvoices,
+      lookbackMonths,
+      lookbackEndYM,
+      2
+    );
+
     const mappedCurrent = currentInvoices.map((inv) => ({
       invoiceNumber: inv.number,
-      invoiceDate: inv.invoiceDate,
-      vendorName: inv.vendorName,
+      invoiceDate:   inv.invoiceDate,
+      vendorName:    inv.vendorName,
       totalAmountIncludingTax: inv.totalAmountIncludingTax,
-      status: inv.status,
+      status:        inv.status,
     }));
-    const verified = crossReferenceMonth(recurring, mappedCurrent, month);
 
-    const found = verified.filter((v) => v.status === "found").length;
-    const absentExpected = verified.filter(
-      (v) => v.status === "absent" && v.expectedThisMonth
-    ).length;
-    const absentNotExpected = verified.filter(
-      (v) => v.status === "absent" && !v.expectedThisMonth
-    ).length;
+    const { verified, possiblyNew } = crossReferenceMonth(recurring, mappedCurrent, month);
+
+    const found           = verified.filter((v) => v.status === "found").length;
+    const absentExpected  = verified.filter((v) => v.status === "absent" && v.expectedThisMonth).length;
+    const absentNotExpected = verified.filter((v) => v.status === "absent" && !v.expectedThisMonth).length;
 
     return NextResponse.json<ChecklistResponse>({
       ok: true,
@@ -97,18 +104,19 @@ export async function GET(request: Request): Promise<NextResponse> {
       month,
       periodLabel,
       lookbackMonths,
-      lookbackStart: lbStartBounds.start,
+      lookbackStart: lbStart.start,
+      lookbackEndYM,
       totalTracked: verified.length,
       found,
       absentExpected,
       absentNotExpected,
       vendors: verified,
+      possiblyNew,
     });
   } catch (err) {
-    const msg =
-      err instanceof BusinessCentralError
-        ? `BC ${err.status}: ${err.message}`
-        : (err as Error).message;
+    const msg = err instanceof BusinessCentralError
+      ? `BC ${err.status}: ${err.message}`
+      : (err as Error).message;
     return NextResponse.json<ChecklistErrorResponse>({ ok: false, error: msg }, { status: 500 });
   }
 }

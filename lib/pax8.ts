@@ -33,12 +33,14 @@ async function getToken(): Promise<string> {
   if (_tokenCache && _tokenCache.expiresAt > now + 30_000) return _tokenCache.token;
 
   const { clientId, clientSecret } = await getCredentials();
+  // Pax8 requires a JSON body with an audience field (not form-encoded)
   const res = await fetch("https://api.pax8.com/v1/token", {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
       client_id: clientId,
       client_secret: clientSecret,
+      audience: "https://api.pax8.com",
       grant_type: "client_credentials",
     }),
     cache: "no-store",

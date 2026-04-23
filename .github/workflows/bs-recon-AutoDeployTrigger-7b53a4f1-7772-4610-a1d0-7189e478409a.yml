@@ -44,4 +44,7 @@ jobs:
             az containerapp update \
               --name bs-recon \
               --resource-group bs-recon-rg \
-              --image bsreconacr.azurecr.io/bs-recon:${{ github.sha }}
+              --image bsreconacr.azurecr.io/bs-recon:${{ github.sha }} \
+              --set-env-vars \
+                "PAX8_CLIENT_ID=${{ secrets.PAX8_CLIENT_ID }}" \
+                "PAX8_CLIENT_SECRET=${{ secrets.PAX8_CLIENT_SECRET }}"

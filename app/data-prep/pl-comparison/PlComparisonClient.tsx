@@ -74,6 +74,7 @@ export default function PlComparisonClient({ defaultEndMonth }: Props) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [showOnlyFlagged, setShowOnlyFlagged] = useState(false);
   const [selectedServiceTypes, setSelectedServiceTypes] = useState<string[] | null>(null);
+  const [monthsToShow, setMonthsToShow] = useState(1);
 
   async function run(serviceTypesOverride?: string[] | null) {
     setLoading(true);
@@ -158,6 +159,22 @@ export default function PlComparisonClient({ defaultEndMonth }: Props) {
             className="mt-1 w-24 rounded border border-slate-300 px-2 py-1 font-mono text-sm"
           />
         </label>
+        <label className="text-sm">
+          <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
+            Months to show
+          </div>
+          <input
+            type="number"
+            value={monthsToShow}
+            min={1}
+            max={4}
+            step={1}
+            onChange={(e) =>
+              setMonthsToShow(Math.max(1, Math.min(4, Number(e.target.value) || 1)))
+            }
+            className="mt-1 w-20 rounded border border-slate-300 px-2 py-1 font-mono text-sm"
+          />
+        </label>
         <button
           type="button"
           onClick={() => run()}
@@ -203,6 +220,7 @@ export default function PlComparisonClient({ defaultEndMonth }: Props) {
       {result && (
         <ResultTable
           result={result}
+          monthsToShow={monthsToShow}
           showOnlyFlagged={showOnlyFlagged}
           expanded={expanded}
           onToggle={toggle}
@@ -270,19 +288,37 @@ function ServiceTypeFilter({
   );
 }
 
+function momCell(
+  monthly: Record<MonthKey, number>,
+  current: MonthKey,
+  priorMonth: MonthKey | undefined
+): { dollars: number; pct: number; hasPrior: boolean } {
+  const cur = monthly[current] ?? 0;
+  if (!priorMonth) return { dollars: 0, pct: 0, hasPrior: false };
+  const pri = monthly[priorMonth] ?? 0;
+  const dollars = cur - pri;
+  const pct = pri !== 0 ? dollars / Math.abs(pri) : 0;
+  return { dollars, pct, hasPrior: pri !== 0 };
+}
+
 function ResultTable({
   result,
+  monthsToShow,
   showOnlyFlagged,
   expanded,
   onToggle,
 }: {
   result: OkResponse;
+  monthsToShow: number;
   showOnlyFlagged: boolean;
   expanded: Record<string, boolean>;
   onToggle: (k: string) => void;
 }) {
-  const { months } = result;
-  const current = months[months.length - 1];
+  const { months: allMonths } = result;
+  const current = allMonths[allMonths.length - 1];
+  const priorMonth: MonthKey | undefined = allMonths[allMonths.length - 2];
+  const months = allMonths.slice(-monthsToShow);
+  const netIncomeMoM = momCell(result.netIncome, current, priorMonth);
 
   return (
     <div className="rounded border border-slate-200 bg-white">
@@ -301,6 +337,7 @@ function ResultTable({
                 {monthLabel(m)}
               </th>
             ))}
+            <th className="px-3 py-2 text-right font-medium w-[90px]">MoM %</th>
             <th className="px-3 py-2 text-right font-medium">Avg prior</th>
             <th className="px-3 py-2 text-right font-medium">Variance</th>
           </tr>
@@ -312,6 +349,7 @@ function ResultTable({
               cat={cat}
               months={months}
               current={current}
+              priorMonth={priorMonth}
               showOnlyFlagged={showOnlyFlagged}
               expanded={expanded}
               onToggle={onToggle}
@@ -330,6 +368,9 @@ function ResultTable({
                 {fmt(result.netIncome[m] ?? 0)}
               </td>
             ))}
+            <td className="px-3 py-2 text-right tabular-nums text-slate-600">
+              {netIncomeMoM.hasPrior ? formatPct(netIncomeMoM.pct) : "—"}
+            </td>
             <td className="px-3 py-2 text-right tabular-nums text-slate-500">—</td>
             <td className="px-3 py-2 text-right tabular-nums text-slate-500">—</td>
           </tr>
@@ -343,6 +384,7 @@ function CategorySection({
   cat,
   months,
   current,
+  priorMonth,
   showOnlyFlagged,
   expanded,
   onToggle,
@@ -350,6 +392,7 @@ function CategorySection({
   cat: CategoryGroup;
   months: MonthKey[];
   current: MonthKey;
+  priorMonth: MonthKey | undefined;
   showOnlyFlagged: boolean;
   expanded: Record<string, boolean>;
   onToggle: (k: string) => void;
@@ -358,6 +401,7 @@ function CategorySection({
     ? cat.accounts.filter((a) => a.flagged)
     : cat.accounts;
   if (cat.accounts.length === 0) return null;
+  const catMoM = momCell(cat.monthly, current, priorMonth);
   return (
     <>
       <tr className="border-t border-slate-300 bg-slate-100/70">
@@ -375,6 +419,9 @@ function CategorySection({
             {fmt(cat.monthly[m] ?? 0)}
           </td>
         ))}
+        <td className="px-3 py-1.5 text-right text-xs tabular-nums text-slate-600">
+          {catMoM.hasPrior ? formatPct(catMoM.pct) : "—"}
+        </td>
         <td className="px-3 py-1.5 text-right text-xs tabular-nums text-slate-500">—</td>
         <td className="px-3 py-1.5 text-right text-xs tabular-nums text-slate-500">—</td>
       </tr>
@@ -384,6 +431,7 @@ function CategorySection({
           account={a}
           months={months}
           current={current}
+          priorMonth={priorMonth}
           expanded={expanded}
           onToggle={onToggle}
         />
@@ -396,12 +444,14 @@ function AccountRows({
   account,
   months,
   current,
+  priorMonth,
   expanded,
   onToggle,
 }: {
   account: AccountGroup;
   months: MonthKey[];
   current: MonthKey;
+  priorMonth: MonthKey | undefined;
   expanded: Record<string, boolean>;
   onToggle: (k: string) => void;
 }) {
@@ -411,6 +461,7 @@ function AccountRows({
     (account.hasSubaccounts && account.subaccounts.length > 0) ||
     (!account.hasSubaccounts && account.customers.length > 0);
   const rowBg = account.flagged ? "bg-amber-50/60" : "";
+  const mom = momCell(account.monthly, current, priorMonth);
   return (
     <>
       <tr
@@ -437,6 +488,9 @@ function AccountRows({
           </td>
         ))}
         <td className="px-3 py-1.5 text-right tabular-nums text-slate-600">
+          {mom.hasPrior ? formatPct(mom.pct) : "—"}
+        </td>
+        <td className="px-3 py-1.5 text-right tabular-nums text-slate-600">
           {fmt(account.avgPrior)}
         </td>
         <td
@@ -462,6 +516,7 @@ function AccountRows({
             sub={sub}
             months={months}
             current={current}
+            priorMonth={priorMonth}
             expanded={expanded}
             onToggle={onToggle}
           />
@@ -473,6 +528,7 @@ function AccountRows({
             row={c}
             months={months}
             current={current}
+            priorMonth={priorMonth}
             indent={1}
           />
         ))}
@@ -485,6 +541,7 @@ function SubaccountRows({
   sub,
   months,
   current,
+  priorMonth,
   expanded,
   onToggle,
 }: {
@@ -492,6 +549,7 @@ function SubaccountRows({
   sub: SubaccountRow;
   months: MonthKey[];
   current: MonthKey;
+  priorMonth: MonthKey | undefined;
   expanded: Record<string, boolean>;
   onToggle: (k: string) => void;
 }) {
@@ -499,6 +557,7 @@ function SubaccountRows({
   const isOpen = expanded[subKey] ?? false;
   const canExpand = sub.customers.length > 0;
   const rowBg = sub.flagged ? "bg-amber-50/40" : "bg-slate-50/60";
+  const mom = momCell(sub.monthly, current, priorMonth);
   return (
     <>
       <tr
@@ -524,6 +583,9 @@ function SubaccountRows({
           </td>
         ))}
         <td className="px-3 py-1 text-right tabular-nums text-slate-500">
+          {mom.hasPrior ? formatPct(mom.pct) : "—"}
+        </td>
+        <td className="px-3 py-1 text-right tabular-nums text-slate-500">
           {fmt(sub.avgPrior)}
         </td>
         <td
@@ -544,6 +606,7 @@ function SubaccountRows({
             row={c}
             months={months}
             current={current}
+            priorMonth={priorMonth}
             indent={2}
           />
         ))}
@@ -555,15 +618,18 @@ function CustomerRow({
   row,
   months,
   current,
+  priorMonth,
   indent,
 }: {
   row: CustomerRow;
   months: MonthKey[];
   current: MonthKey;
+  priorMonth: MonthKey | undefined;
   indent: 1 | 2;
 }) {
   const padLeft = indent === 2 ? "pl-16" : "pl-10";
   const bg = row.flagged ? "bg-amber-50/30" : "bg-white";
+  const mom = momCell(row.monthly, current, priorMonth);
   return (
     <tr className={`border-t border-slate-100 text-[11px] ${bg}`}>
       <td className="px-2 py-1" />
@@ -578,6 +644,9 @@ function CustomerRow({
           {fmt(row.monthly[m] ?? 0)}
         </td>
       ))}
+      <td className="px-3 py-1 text-right tabular-nums text-slate-400">
+        {mom.hasPrior ? formatPct(mom.pct) : "—"}
+      </td>
       <td className="px-3 py-1 text-right tabular-nums text-slate-400">
         {fmt(row.avgPrior)}
       </td>

@@ -1011,3 +1011,100 @@ export async function listSalesCreditMemosWithLines(
   }
   return out;
 }
+
+// ─── G/L Budgets (reportsFinance/beta) ────────────────────────────────────────
+
+// The financial reporting APIs live under a different base path from v1.0/v2.0:
+//   /api/microsoft/reportsFinance/beta/companies({id})/...
+// so we need a dedicated GET helper for this API group.
+async function bcGetFinanceReports<T>(pathAndQuery: string): Promise<T> {
+  const creds = await loadCredentials();
+  const token = await getAccessToken(creds);
+  const url =
+    `https://api.businesscentral.dynamics.com/v2.0/` +
+    `${encodeURIComponent(creds.tenantId)}/${encodeURIComponent(creds.environmentName)}` +
+    `/api/microsoft/reportsFinance/beta${pathAndQuery}`;
+  const res = await fetch(url, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+    cache: "no-store",
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    let parsed: unknown = text;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      // keep as text
+    }
+    throw new BusinessCentralError(
+      `BC ${res.status} ${res.statusText}`,
+      res.status,
+      parsed
+    );
+  }
+  return JSON.parse(text) as T;
+}
+
+export type BcGlBudget = {
+  id: string;
+  name: string;
+  description?: string;
+  blocked?: boolean;
+};
+
+export type BcGlBudgetEntry = {
+  id: string;
+  budgetName: string;
+  date: string;
+  accountNumber: string;
+  amount: number;
+  description?: string;
+  dimensionSetId?: number;
+};
+
+export async function listGlBudgets(): Promise<BcGlBudget[]> {
+  const companyId = await getSelectedCompanyId();
+  const out: BcGlBudget[] = [];
+  let next: string | null = `/companies(${companyId})/generalLedgerBudgets`;
+  while (next) {
+    const page: BcPage<BcGlBudget> = next.startsWith("http")
+      ? await bcGetAbsolute<BcPage<BcGlBudget>>(next)
+      : await bcGetFinanceReports<BcPage<BcGlBudget>>(next);
+    out.push(...page.value);
+    next = page["@odata.nextLink"] ?? null;
+  }
+  return out;
+}
+
+/**
+ * Fetch budget entries for a named G/L Budget within [startDate, endDate].
+ * Returns all accounts; callers can group/filter as needed.
+ */
+export async function listGlBudgetEntries(
+  budgetName: string,
+  startDate: string,
+  endDate: string
+): Promise<BcGlBudgetEntry[]> {
+  const companyId = await getSelectedCompanyId();
+  const filterParts = [
+    `budgetName eq '${budgetName.replace(/'/g, "''")}'`,
+    `date ge ${startDate}`,
+    `date le ${endDate}`,
+  ];
+  const filter = filterParts.join(" and ");
+  const path =
+    `/companies(${companyId})/generalBudgetEntries?` +
+    `$filter=${encodeURIComponent(filter)}&` +
+    `$orderby=date,accountNumber`;
+  const out: BcGlBudgetEntry[] = [];
+  let next: string | null = path;
+  while (next) {
+    const page: BcPage<BcGlBudgetEntry> = next.startsWith("http")
+      ? await bcGetAbsolute<BcPage<BcGlBudgetEntry>>(next)
+      : await bcGetFinanceReports<BcPage<BcGlBudgetEntry>>(next);
+    out.push(...page.value);
+    next = page["@odata.nextLink"] ?? null;
+  }
+  return out;
+}

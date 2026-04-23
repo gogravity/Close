@@ -11,6 +11,8 @@ const ITEMS: Item[] = [
   { href: "/data-prep/expense-checklist", label: "Expense Checklist" },
   { href: "/data-prep/pax8", label: "Pax8 Bill" },
   { href: "/data-prep/sales-tax", label: "Sales Tax" },
+  { href: "/data-prep/budget-vs-actual", label: "Budget vs Actual" },
+  { href: "/data-prep/mrr-tracker", label: "MRR Tracker" },
 ];
 
 export default async function DataPrepNav() {

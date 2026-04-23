@@ -48,29 +48,51 @@ export default function SalesTaxClient({
 }: Props) {
   const [groupBy, setGroupBy] = useState<GroupKey>("state");
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [excludeVoip, setExcludeVoip] = useState(false);
 
-  const totalTax = useMemo(() => rows.reduce((s, r) => s + r.taxAmount, 0), [rows]);
-  const totalTaxable = useMemo(
-    () => rows.reduce((s, r) => s + r.taxableAmount, 0),
+  // VoIP invoices come from Datagate and their doc numbers start with "DG".
+  const filteredRows = useMemo(
+    () =>
+      excludeVoip
+        ? rows.filter((r) => !r.docNumber.toUpperCase().startsWith("DG"))
+        : rows,
+    [rows, excludeVoip]
+  );
+  const voipExcludedTax = useMemo(
+    () =>
+      rows
+        .filter((r) => r.docNumber.toUpperCase().startsWith("DG"))
+        .reduce((s, r) => s + r.taxAmount, 0),
     [rows]
   );
+
+  const totalTax = useMemo(
+    () => filteredRows.reduce((s, r) => s + r.taxAmount, 0),
+    [filteredRows]
+  );
+  const totalTaxable = useMemo(
+    () => filteredRows.reduce((s, r) => s + r.taxableAmount, 0),
+    [filteredRows]
+  );
   const invoiceCount = useMemo(() => {
-    const ids = new Set(rows.filter((r) => r.docType === "Invoice").map((r) => r.docId));
-    return ids.size;
-  }, [rows]);
-  const cmCount = useMemo(() => {
     const ids = new Set(
-      rows.filter((r) => r.docType === "Credit Memo").map((r) => r.docId)
+      filteredRows.filter((r) => r.docType === "Invoice").map((r) => r.docId)
     );
     return ids.size;
-  }, [rows]);
+  }, [filteredRows]);
+  const cmCount = useMemo(() => {
+    const ids = new Set(
+      filteredRows.filter((r) => r.docType === "Credit Memo").map((r) => r.docId)
+    );
+    return ids.size;
+  }, [filteredRows]);
 
   const groups = useMemo(() => {
     const m = new Map<
       string,
       { key: string; label: string; taxable: number; tax: number; rows: TaxTransactionRow[] }
     >();
-    for (const r of rows) {
+    for (const r of filteredRows) {
       let key: string;
       let label: string;
       if (groupBy === "state") {
@@ -93,7 +115,7 @@ export default function SalesTaxClient({
       b.rows.push(r);
     }
     return Array.from(m.values()).sort((a, b) => Math.abs(b.tax) - Math.abs(a.tax));
-  }, [rows, groupBy]);
+  }, [filteredRows, groupBy]);
 
   return (
     <div className="space-y-6">
@@ -113,7 +135,27 @@ export default function SalesTaxClient({
         />
       </div>
 
-      {/* Grouping selector */}
+      {/* Filter + grouping selector */}
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={excludeVoip}
+            onChange={(e) => {
+              setExcludeVoip(e.target.checked);
+              setExpanded(null);
+            }}
+            className="h-4 w-4 rounded border-slate-300 text-slate-800 focus:ring-slate-400"
+          />
+          <span>
+            Exclude VoIP
+            <span className="ml-2 text-xs text-slate-500">
+              (DG invoices{voipExcludedTax !== 0 ? ` · ${fmt(voipExcludedTax)} in tax` : ""})
+            </span>
+          </span>
+        </label>
+      </div>
+
       <div className="flex items-center gap-2">
         <span className="text-xs uppercase tracking-wide text-slate-500">Group by:</span>
         {(["state", "taxCode", "customer"] as const).map((g) => (

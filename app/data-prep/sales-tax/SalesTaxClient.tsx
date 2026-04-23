@@ -135,7 +135,7 @@ export default function SalesTaxClient({
         />
       </div>
 
-      {/* Filter + grouping selector */}
+      {/* Filter + export */}
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer select-none">
           <input
@@ -154,6 +154,19 @@ export default function SalesTaxClient({
             </span>
           </span>
         </label>
+        <button
+          onClick={() =>
+            downloadCsv(filteredRows, groups, groupBy, periodStart, periodEnd, excludeVoip)
+          }
+          className="inline-flex items-center gap-1.5 rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+          title="Download detail + summary as CSV (opens in Excel)"
+        >
+          <svg viewBox="0 0 16 16" fill="currentColor" className="h-3.5 w-3.5">
+            <path d="M8 2a.5.5 0 0 1 .5.5V10l2.146-2.146a.5.5 0 1 1 .708.708l-3 3a.5.5 0 0 1-.708 0l-3-3a.5.5 0 1 1 .708-.708L7.5 10V2.5A.5.5 0 0 1 8 2Z" />
+            <path d="M2 13.5a.5.5 0 0 1 .5-.5h11a.5.5 0 0 1 0 1h-11a.5.5 0 0 1-.5-.5Z" />
+          </svg>
+          Export CSV
+        </button>
       </div>
 
       <div className="flex items-center gap-2">
@@ -372,6 +385,97 @@ export default function SalesTaxClient({
       </div>
     </div>
   );
+}
+
+function csvEscape(val: string | number): string {
+  const s = String(val ?? "");
+  if (s.includes(",") || s.includes("\"") || s.includes("\n")) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
+function downloadCsv(
+  rows: TaxTransactionRow[],
+  groups: { label: string; taxable: number; tax: number; rows: TaxTransactionRow[] }[],
+  groupBy: GroupKey,
+  periodStart: string,
+  periodEnd: string,
+  excludeVoip: boolean
+): void {
+  const lines: string[] = [];
+
+  lines.push(`Sales Tax Report,${periodStart} to ${periodEnd}`);
+  if (excludeVoip) lines.push("VoIP invoices (DG-prefixed) excluded,");
+  lines.push("");
+
+  // Summary section
+  const summaryLabel =
+    groupBy === "state" ? "State" : groupBy === "taxCode" ? "Tax Code" : "Customer";
+  lines.push(`Summary by ${summaryLabel}`);
+  lines.push(["Group", "Taxable Sales", "Tax Collected", "Lines"].join(","));
+  let sumTaxable = 0;
+  let sumTax = 0;
+  for (const g of groups) {
+    lines.push(
+      [csvEscape(g.label), g.taxable.toFixed(2), g.tax.toFixed(2), g.rows.length].join(",")
+    );
+    sumTaxable += g.taxable;
+    sumTax += g.tax;
+  }
+  lines.push(["Total", sumTaxable.toFixed(2), sumTax.toFixed(2), rows.length].join(","));
+  lines.push("");
+
+  // Detail section
+  lines.push("Detail");
+  lines.push(
+    [
+      "Doc #",
+      "Type",
+      "Date",
+      "Customer #",
+      "Customer",
+      "State",
+      "City",
+      "Tax Area",
+      "Tax Code",
+      "Rate %",
+      "Taxable",
+      "Tax",
+      "Description",
+    ].join(",")
+  );
+  for (const r of rows) {
+    lines.push(
+      [
+        csvEscape(r.docNumber),
+        r.docType,
+        r.docDate,
+        csvEscape(r.customerNumber),
+        csvEscape(r.customerName),
+        csvEscape(r.state),
+        csvEscape(r.city),
+        csvEscape(r.taxAreaDisplayName || r.taxAreaId),
+        csvEscape(r.taxCode),
+        r.taxPercent ? r.taxPercent.toFixed(2) : "",
+        r.taxableAmount.toFixed(2),
+        r.taxAmount.toFixed(2),
+        csvEscape(r.description),
+      ].join(",")
+    );
+  }
+
+  // Prepend BOM so Excel detects UTF-8 (for customer names with accents).
+  const csv = "\uFEFF" + lines.join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `sales-tax-${periodStart}-to-${periodEnd}${excludeVoip ? "-novoip" : ""}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 function Panel({

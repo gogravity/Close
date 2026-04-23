@@ -14,7 +14,8 @@ import type {
   IronscalesResponse,
   IronscalesErrorResponse,
 } from "@/app/api/ironscales/route";
-import type { Pax8Invoice, Pax8InvoiceItem, InvoiceSummary, EstimatedBill } from "@/lib/pax8";
+import type { Pax8Invoice, Pax8InvoiceItem, InvoiceSummary, EstimatedBill, CurrentBillEstimate } from "@/lib/pax8";
+import type { Pax8EstimateResponse, Pax8EstimateErrorResponse } from "@/app/api/pax8/estimate/route";
 import type { IronscalesCompanyStats } from "@/lib/ironscales";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -85,6 +86,160 @@ function Tabs({ active, onChange }: { active: Tab; onChange: (t: Tab) => void })
   );
 }
 
+// ── Current Bill Estimate section ─────────────────────────────────────────────
+
+function CurrentBillSection() {
+  const [loading, setLoading] = useState(false);
+  const [estimate, setEstimate] = useState<CurrentBillEstimate | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  async function calculate() {
+    setLoading(true);
+    setError(null);
+    try {
+      const res  = await fetch("/api/pax8/estimate");
+      const json = await res.json() as Pax8EstimateResponse | Pax8EstimateErrorResponse;
+      if (!json.ok) { setError((json as Pax8EstimateErrorResponse).error); return; }
+      setEstimate((json as Pax8EstimateResponse).estimate);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function toggleBucket(label: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.has(label) ? next.delete(label) : next.add(label);
+      return next;
+    });
+  }
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+      <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-4 py-2.5">
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-widest text-slate-500">Current Month Estimate</h3>
+          {estimate && (
+            <p className="mt-0.5 text-[10px] text-slate-400">
+              Based on {fmtDate(estimate.baselineInvoiceDate)} invoice ·
+              {estimate.assumptions.newSubsAdded > 0 && ` +${estimate.assumptions.newSubsAdded} new`}
+              {estimate.assumptions.cancelledSubsRemoved > 0 && ` −${estimate.assumptions.cancelledSubsRemoved} cancelled`}
+              {estimate.assumptions.ironscalesLiveCount !== null && ` · ${estimate.assumptions.ironscalesLiveCount} Ironscales seats live`}
+            </p>
+          )}
+        </div>
+        <button
+          onClick={calculate}
+          disabled={loading}
+          className="h-8 rounded-md bg-blue-600 px-4 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50 transition-colors"
+        >
+          {loading ? "Calculating…" : estimate ? "Recalculate" : "Calculate Current Bill"}
+        </button>
+      </div>
+
+      {error && (
+        <div className="border-b border-red-100 bg-red-50 px-4 py-2.5 text-sm text-red-700">{error}</div>
+      )}
+
+      {loading && (
+        <div className="flex items-center justify-center py-10 text-sm text-slate-400">
+          Fetching live subscriptions and Ironscales seat counts…
+        </div>
+      )}
+
+      {estimate && !loading && (
+        <>
+          {/* Grand total banner */}
+          <div className="flex items-baseline gap-3 border-b border-slate-100 px-5 py-4">
+            <span className="text-3xl font-semibold tabular-nums text-slate-800">{fmtMoney(estimate.grandTotal)}</span>
+            <span className="text-sm text-slate-400">estimated this month</span>
+            <span className={`ml-auto text-sm font-medium tabular-nums ${estimate.assumptions.deltaTotal > 0 ? "text-red-600" : estimate.assumptions.deltaTotal < 0 ? "text-emerald-600" : "text-slate-400"}`}>
+              {estimate.assumptions.deltaTotal >= 0 ? "+" : ""}{fmtMoney(estimate.assumptions.deltaTotal)} vs baseline
+            </span>
+          </div>
+
+          {/* Bucket table */}
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-100 text-left">
+                <th className="w-6 px-2 py-2" />
+                <th className="px-4 py-2 text-[10px] font-semibold uppercase tracking-widest text-slate-400">Category</th>
+                <th className="px-4 py-2 text-[10px] font-semibold uppercase tracking-widest text-slate-400 text-right">Baseline</th>
+                <th className="px-4 py-2 text-[10px] font-semibold uppercase tracking-widest text-slate-400 text-right">Delta</th>
+                <th className="px-4 py-2 text-[10px] font-semibold uppercase tracking-widest text-slate-400 text-right">Estimate</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-50">
+              {estimate.buckets.filter((b) => b.total !== 0 || b.baseline !== 0).map((bucket) => {
+                const isOpen = expanded.has(bucket.label);
+                const hasChanges = bucket.changes.length > 0;
+                return (
+                  <React.Fragment key={bucket.label}>
+                    <tr
+                      className={`${hasChanges ? "cursor-pointer hover:bg-slate-50" : ""}`}
+                      onClick={() => hasChanges && toggleBucket(bucket.label)}
+                    >
+                      <td className="px-2 py-2.5 text-center text-[10px] text-slate-400">
+                        {hasChanges ? (isOpen ? "▾" : "▸") : ""}
+                      </td>
+                      <td className="px-4 py-2.5 font-medium text-slate-700">
+                        {bucket.label}
+                        {bucket.label === "Azure" && (
+                          <span className="ml-2 text-[10px] text-slate-400">(last invoice)</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-right tabular-nums text-slate-500">{fmtMoney(bucket.baseline)}</td>
+                      <td className={`px-4 py-2.5 text-right tabular-nums text-xs font-medium ${bucket.delta > 0 ? "text-red-600" : bucket.delta < 0 ? "text-emerald-600" : "text-slate-400"}`}>
+                        {bucket.delta !== 0 ? `${bucket.delta > 0 ? "+" : ""}${fmtMoney(bucket.delta)}` : "—"}
+                      </td>
+                      <td className="px-4 py-2.5 text-right tabular-nums font-semibold text-slate-800">{fmtMoney(bucket.total)}</td>
+                    </tr>
+                    {isOpen && bucket.changes.map((ch, i) => (
+                      <tr key={i} className="bg-slate-50/60">
+                        <td />
+                        <td colSpan={3} className="px-6 py-1.5 text-[11px] text-slate-500 truncate max-w-0" title={ch.description}>
+                          {ch.description}
+                        </td>
+                        <td className={`px-4 py-1.5 text-right tabular-nums text-[11px] font-medium ${ch.cost > 0 ? "text-red-600" : "text-emerald-600"}`}>
+                          {ch.cost > 0 ? "+" : ""}{fmtMoney(ch.cost)}
+                        </td>
+                      </tr>
+                    ))}
+                  </React.Fragment>
+                );
+              })}
+              <tr className="border-t-2 border-slate-200 bg-slate-50">
+                <td />
+                <td className="px-4 py-3 text-sm font-semibold text-slate-700">Total</td>
+                <td className="px-4 py-3 text-right tabular-nums text-sm text-slate-500">{fmtMoney(estimate.assumptions.baselineTotal)}</td>
+                <td className={`px-4 py-3 text-right tabular-nums text-sm font-medium ${estimate.assumptions.deltaTotal > 0 ? "text-red-600" : estimate.assumptions.deltaTotal < 0 ? "text-emerald-600" : "text-slate-400"}`}>
+                  {estimate.assumptions.deltaTotal !== 0 ? `${estimate.assumptions.deltaTotal > 0 ? "+" : ""}${fmtMoney(estimate.assumptions.deltaTotal)}` : "—"}
+                </td>
+                <td className="px-4 py-3 text-right tabular-nums text-sm font-bold text-slate-800">{fmtMoney(estimate.grandTotal)}</td>
+              </tr>
+            </tbody>
+          </table>
+
+          {estimate.assumptions.azureNote && (
+            <div className="border-t border-slate-100 bg-amber-50 px-4 py-2 text-[10px] text-amber-700">
+              ⚠ {estimate.assumptions.azureNote}
+            </div>
+          )}
+        </>
+      )}
+
+      {!estimate && !loading && !error && (
+        <div className="px-5 py-8 text-center text-sm text-slate-400">
+          Click <span className="font-medium text-slate-600">Calculate Current Bill</span> to predict this month&apos;s Pax8 charges using the last invoice as baseline, adjusted for new and cancelled subscriptions and live Ironscales seat counts.
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Overview tab ──────────────────────────────────────────────────────────────
 
 function OverviewTab({
@@ -110,6 +265,9 @@ function OverviewTab({
 
   return (
     <div className="space-y-6">
+      {/* Current Bill Estimate */}
+      <CurrentBillSection />
+
       {/* Estimated vs Actual */}
       <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-100 bg-slate-50 px-4 py-2.5">

@@ -1,7 +1,5 @@
-"use client";
-
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { headers } from "next/headers";
 
 type Item = { href: string; label: string };
 
@@ -11,11 +9,12 @@ const ITEMS: Item[] = [
   { href: "/data-prep/pl-comparison", label: "P&L Comparison" },
   { href: "/data-prep/payroll", label: "Payroll" },
   { href: "/data-prep/expense-checklist", label: "Expense Checklist" },
-  { href: "/data-prep/pax8",             label: "Pax8 Bill" },
+  { href: "/data-prep/pax8", label: "Pax8 Bill" },
 ];
 
-export default function DataPrepNav() {
-  const pathname = usePathname();
+export default async function DataPrepNav() {
+  const h = await headers();
+  const pathname = h.get("x-pathname") ?? "";
 
   return (
     <>

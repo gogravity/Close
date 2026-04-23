@@ -5,13 +5,14 @@ export const metadata: Metadata = { title: "Pax8 Bill" };
 
 export default function Pax8Page() {
   return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-xl font-semibold text-slate-800">Pax8 Bill</h1>
-        <p className="mt-1 text-sm text-slate-500">
+    <div className="px-8 py-8 max-w-7xl">
+      <header className="mb-6">
+        <div className="text-xs uppercase tracking-wide text-slate-500">Data Preparation</div>
+        <h1 className="mt-1 text-2xl font-semibold text-slate-900">Pax8 Bill</h1>
+        <p className="mt-1 text-sm text-slate-600">
           Monthly invoice breakdown, per-client cost detail, and estimated vs actual comparison
         </p>
-      </div>
+      </header>
       <Pax8Client />
     </div>
   );

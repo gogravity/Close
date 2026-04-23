@@ -6,6 +6,7 @@
  */
 import "server-only";
 import { getIntegrationSecrets } from "./settings";
+import { getAzureCosts, AzureCostError } from "./azureCostManagement";
 
 export class Pax8Error extends Error {
   constructor(
@@ -523,36 +524,77 @@ export async function buildCurrentBillEstimate(): Promise<CurrentBillEstimate> {
     });
   }
 
-  // 3. Ironscales live-count delta (IRN- SKUs)
+  // 3. Ironscales live-count delta — per-SKU tier pricing (Complete / Email / Core)
+  //    Each tier has a different unit cost on the Pax8 invoice; using an aggregate
+  //    would over/under-count when the seat mix differs from last month.
   let ironscalesLiveCount: number | null = null;
   try {
-    const { getAllCompanyStats } = await import("./ironscales");
+    const { getAllCompanyStats, IRONSCALES_SKU_MAP } = await import("./ironscales");
     const stats = await getAllCompanyStats();
-    const liveTotal = stats.reduce((s, c) => s + (c.protectedMailboxes ?? 0), 0);
-    ironscalesLiveCount = liveTotal;
+    ironscalesLiveCount = stats.reduce((s, c) => s + (c.protectedMailboxes ?? 0), 0);
 
-    let invIrnQty = 0, invIrnCost = 0;
+    // Per-SKU unit cost from last invoice
+    const invSkuUnitCost: Record<string, number> = {};
     for (const [sku, qty] of Object.entries(apiQty)) {
-      if (sku.startsWith("IRN-")) { invIrnQty += qty; invIrnCost += (apiCost[sku] ?? 0); }
-    }
-    if (invIrnQty > 0 && liveTotal > 0) {
-      const unitCost = invIrnCost / invIrnQty;
-      const newCost  = r2(liveTotal * unitCost);
-      const delta    = r2(newCost - invIrnCost);
-      if (delta !== 0) {
-        addDelta("Cybersecurity Resale", delta, {
-          type: "live_count",
-          description: `[LIVE] Ironscales: ${liveTotal} seats × $${unitCost.toFixed(4)} = $${newCost.toFixed(2)} (was $${invIrnCost.toFixed(2)})`,
-          cost: delta,
-        });
+      if (sku.startsWith("IRN-") && qty > 0) {
+        invSkuUnitCost[sku] = r2((apiCost[sku] ?? 0) / qty);
       }
     }
+
+    // Group live seats by Pax8 SKU via planType → SKU map
+    const tierSeats: Record<string, { planType: string; seats: number }> = {};
+    for (const co of stats) {
+      const seats = co.protectedMailboxes ?? 0;
+      if (seats === 0) continue;
+      const sku = IRONSCALES_SKU_MAP[(co.planType ?? "").toLowerCase()] ?? "";
+      if (!sku) continue;
+      tierSeats[sku] ??= { planType: co.planType, seats: 0 };
+      tierSeats[sku].seats += seats;
+    }
+
+    // Per-tier delta: new_cost(tier) − baseline_cost(tier)
+    for (const [sku, { planType, seats }] of Object.entries(tierSeats)) {
+      const unitCost = invSkuUnitCost[sku] ?? 0;
+      if (unitCost === 0) continue; // SKU not on last invoice
+      const newCost  = r2(seats * unitCost);
+      const baseline = r2(apiCost[sku] ?? 0);
+      const delta    = r2(newCost - baseline);
+      addDelta("Cybersecurity Resale", delta, {
+        type: "live_count",
+        description: `[LIVE] Ironscales ${planType}: ${seats} seats × $${unitCost.toFixed(4)} = $${newCost.toFixed(2)}`,
+        cost: delta,
+      });
+    }
   } catch { /* Ironscales not configured — continue without */ }
+
+  // 3b. Azure Cost Management — live MTD spend (optional)
+  let azureLiveTotal: number | null = null;
+  let azureNote = "Azure uses last invoice total — actual charges vary by consumption.";
+  try {
+    const azureResult = await getAzureCosts("BillingMonthToDate");
+    azureLiveTotal = azureResult.totalCost;
+    azureNote = `Azure: live MTD spend from Azure Cost Management (${azureResult.asOfDate}).`;
+  } catch (err) {
+    if (err instanceof AzureCostError && err.status === 400) {
+      // Not configured — silently fall back to last invoice
+    } else {
+      // Configured but errored — surface it in the note
+      azureNote = `Azure uses last invoice total — live fetch failed: ${(err as Error).message}`;
+    }
+  }
+
+  const azureTotal = azureLiveTotal !== null ? r2(azureLiveTotal) : r2(azureBaseline);
+  const azureDelta = azureLiveTotal !== null ? r2(azureLiveTotal - azureBaseline) : 0;
 
   // 4. Assemble final buckets
   const buckets: EstimateBucket[] = CBE_BUCKET_ORDER.map((label) => {
     if (label === "Azure") {
-      return { label, baseline: r2(azureBaseline), delta: 0, total: r2(azureBaseline), itemCount: 0, changes: [] };
+      const changes: EstimateChange[] = azureLiveTotal !== null ? [{
+        type:        "live_count",
+        description: `[LIVE] Azure Cost Management MTD: $${azureTotal.toFixed(2)} vs last invoice $${r2(azureBaseline).toFixed(2)}`,
+        cost:        azureDelta,
+      }] : [];
+      return { label, baseline: r2(azureBaseline), delta: azureDelta, total: azureTotal, itemCount: 0, changes };
     }
     const base  = baselineBuckets[label] ?? { cost: 0, itemCount: 0 };
     const delta = deltas[label]          ?? { cost: 0, itemCount: 0, changes: [] };
@@ -568,7 +610,7 @@ export async function buildCurrentBillEstimate(): Promise<CurrentBillEstimate> {
 
   const grandTotal    = r2(buckets.reduce((s, b) => s + b.total, 0));
   const baselineTotal = r2(Object.values(baselineBuckets).reduce((s, b) => s + b.cost, 0) + azureBaseline);
-  const deltaTotal    = r2(Object.values(deltas).reduce((s, d) => s + d.cost, 0));
+  const deltaTotal    = r2(Object.values(deltas).reduce((s, d) => s + d.cost, 0) + azureDelta);
   const allChanges    = Object.values(deltas).flatMap((d) => d.changes);
 
   return {
@@ -583,7 +625,7 @@ export async function buildCurrentBillEstimate(): Promise<CurrentBillEstimate> {
       newSubsAdded:          allChanges.filter((c) => c.type === "new" || c.type === "annual").length,
       cancelledSubsRemoved:  allChanges.filter((c) => c.type === "cancelled").length,
       ironscalesLiveCount,
-      azureNote: "Azure uses last invoice total — actual charges vary by consumption.",
+      azureNote,
     },
   };
 }

@@ -131,6 +131,41 @@ export const integrations: Integration[] = [
     ],
   },
   {
+    id: "azure-cost",
+    name: "Azure Cost Management",
+    category: "spend",
+    blurb:
+      "Azure Cost Management REST API. Pulls month-to-date cloud spend by customer/subscription for accurate Azure cost accounting in the Pax8 bill estimate.",
+    docsUrl: "https://learn.microsoft.com/en-us/azure/cost-management-billing/costs/quick-acm-cost-analysis",
+    fields: [
+      {
+        key: "tenantId",
+        label: "Tenant ID",
+        type: "text",
+        placeholder: "00000000-0000-0000-0000-000000000000",
+        help: "Azure AD tenant of the app registration",
+      },
+      {
+        key: "clientId",
+        label: "Client ID",
+        type: "secret",
+        help: "App registration client ID — needs Cost Management Reader role on the scope",
+      },
+      {
+        key: "clientSecret",
+        label: "Client Secret",
+        type: "secret",
+      },
+      {
+        key: "scope",
+        label: "Scope",
+        type: "text",
+        placeholder: "/subscriptions/00000000-0000-0000-0000-000000000000",
+        help: "Full ARM scope path. Subscription: /subscriptions/{id} · Billing account: /providers/Microsoft.Billing/billingAccounts/{id} · Management group: /providers/Microsoft.Management/managementGroups/{id}",
+      },
+    ],
+  },
+  {
     id: "anthropic",
     name: "Anthropic API",
     category: "ai",

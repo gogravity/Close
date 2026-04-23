@@ -17,6 +17,8 @@ import type {
 import type { Pax8Invoice, Pax8InvoiceItem, InvoiceSummary, EstimatedBill, CurrentBillEstimate } from "@/lib/pax8";
 import type { Pax8EstimateResponse, Pax8EstimateErrorResponse } from "@/app/api/pax8/estimate/route";
 import type { IronscalesCompanyStats } from "@/lib/ironscales";
+import type { AzureCostResponse, AzureCostErrorResponse } from "@/app/api/azure/cost/route";
+import type { AzureCostResult } from "@/lib/azureCostManagement";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -58,7 +60,7 @@ function StatusPill({ status }: { status: string }) {
 
 // ── Tab bar ───────────────────────────────────────────────────────────────────
 
-type Tab = "overview" | "clients" | "lineitems" | "ironscales";
+type Tab = "overview" | "clients" | "lineitems" | "ironscales" | "azure";
 
 function Tabs({ active, onChange }: { active: Tab; onChange: (t: Tab) => void }) {
   const tabs: { id: Tab; label: string }[] = [
@@ -66,6 +68,7 @@ function Tabs({ active, onChange }: { active: Tab; onChange: (t: Tab) => void })
     { id: "clients",    label: "Per Client" },
     { id: "lineitems",  label: "Line Items" },
     { id: "ironscales", label: "Ironscales Seats" },
+    { id: "azure",      label: "Azure Cost" },
   ];
   return (
     <div className="flex gap-1 border-b border-slate-200">
@@ -89,10 +92,12 @@ function Tabs({ active, onChange }: { active: Tab; onChange: (t: Tab) => void })
 // ── Current Bill Estimate section ─────────────────────────────────────────────
 
 function CurrentBillSection() {
-  const [loading, setLoading] = useState(false);
-  const [estimate, setEstimate] = useState<CurrentBillEstimate | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [loading, setLoading]       = useState(false);
+  const [estimate, setEstimate]     = useState<CurrentBillEstimate | null>(null);
+  const [error, setError]           = useState<string | null>(null);
+  const [expanded, setExpanded]     = useState<Set<string>>(new Set());
+  // pct overrides: bucket label → % of baseline to use (default 100)
+  const [pctOverrides, setPctOverrides] = useState<Record<string, number>>({});
 
   async function calculate() {
     setLoading(true);
@@ -116,6 +121,26 @@ function CurrentBillSection() {
       return next;
     });
   }
+
+  function setPct(label: string, raw: string) {
+    const v = parseFloat(raw);
+    if (isNaN(v)) return;
+    setPctOverrides((prev) => ({ ...prev, [label]: Math.max(0, Math.min(200, v)) }));
+  }
+
+  // Derive adjusted totals — apply pct overrides to static (no-API-change) buckets
+  const adjustedBuckets = (estimate?.buckets ?? []).map((b) => {
+    const isStatic = b.changes.length === 0; // no live-count or sub changes
+    if (!isStatic) return b;
+    const pct      = pctOverrides[b.label] ?? 100;
+    const adjTotal = Math.round(b.baseline * (pct / 100) * 100) / 100;
+    const adjDelta = Math.round((adjTotal - b.baseline) * 100) / 100;
+    return { ...b, delta: adjDelta, total: adjTotal };
+  });
+
+  const adjGrandTotal  = Math.round(adjustedBuckets.reduce((s, b) => s + b.total, 0) * 100) / 100;
+  const adjDeltaTotal  = Math.round(adjustedBuckets.reduce((s, b) => s + b.delta, 0) * 100) / 100;
+  const adjBaseline    = estimate?.assumptions.baselineTotal ?? 0;
 
   return (
     <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -154,10 +179,10 @@ function CurrentBillSection() {
         <>
           {/* Grand total banner */}
           <div className="flex items-baseline gap-3 border-b border-slate-100 px-5 py-4">
-            <span className="text-3xl font-semibold tabular-nums text-slate-800">{fmtMoney(estimate.grandTotal)}</span>
+            <span className="text-3xl font-semibold tabular-nums text-slate-800">{fmtMoney(adjGrandTotal)}</span>
             <span className="text-sm text-slate-400">estimated this month</span>
-            <span className={`ml-auto text-sm font-medium tabular-nums ${estimate.assumptions.deltaTotal > 0 ? "text-red-600" : estimate.assumptions.deltaTotal < 0 ? "text-emerald-600" : "text-slate-400"}`}>
-              {estimate.assumptions.deltaTotal >= 0 ? "+" : ""}{fmtMoney(estimate.assumptions.deltaTotal)} vs baseline
+            <span className={`ml-auto text-sm font-medium tabular-nums ${adjDeltaTotal > 0 ? "text-red-600" : adjDeltaTotal < 0 ? "text-emerald-600" : "text-slate-400"}`}>
+              {adjDeltaTotal >= 0 ? "+" : ""}{fmtMoney(adjDeltaTotal)} vs baseline
             </span>
           </div>
 
@@ -173,9 +198,11 @@ function CurrentBillSection() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
-              {estimate.buckets.filter((b) => b.total !== 0 || b.baseline !== 0).map((bucket) => {
-                const isOpen = expanded.has(bucket.label);
-                const hasChanges = bucket.changes.length > 0;
+              {adjustedBuckets.filter((b) => b.total !== 0 || b.baseline !== 0).map((bucket) => {
+                const isOpen      = expanded.has(bucket.label);
+                const hasChanges  = bucket.changes.length > 0;
+                const isStatic    = !hasChanges; // shows pct input
+                const pct         = pctOverrides[bucket.label] ?? 100;
                 return (
                   <React.Fragment key={bucket.label}>
                     <tr
@@ -187,13 +214,35 @@ function CurrentBillSection() {
                       </td>
                       <td className="px-4 py-2.5 font-medium text-slate-700">
                         {bucket.label}
-                        {bucket.label === "Azure" && (
+                        {bucket.label === "Azure" && bucket.changes.length === 0 && (
                           <span className="ml-2 text-[10px] text-slate-400">(last invoice)</span>
                         )}
                       </td>
                       <td className="px-4 py-2.5 text-right tabular-nums text-slate-500">{fmtMoney(bucket.baseline)}</td>
-                      <td className={`px-4 py-2.5 text-right tabular-nums text-xs font-medium ${bucket.delta > 0 ? "text-red-600" : bucket.delta < 0 ? "text-emerald-600" : "text-slate-400"}`}>
-                        {bucket.delta !== 0 ? `${bucket.delta > 0 ? "+" : ""}${fmtMoney(bucket.delta)}` : "—"}
+                      <td className="px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
+                        {isStatic ? (
+                          <div className="flex items-center justify-end gap-1">
+                            <input
+                              type="number"
+                              min={0}
+                              max={200}
+                              step={1}
+                              value={pct}
+                              onChange={(e) => setPct(bucket.label, e.target.value)}
+                              className="w-14 rounded border border-slate-300 bg-white px-1.5 py-0.5 text-right text-xs tabular-nums text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                            />
+                            <span className="text-xs text-slate-400">%</span>
+                            {bucket.delta !== 0 && (
+                              <span className={`ml-1 text-xs font-medium tabular-nums ${bucket.delta > 0 ? "text-red-600" : "text-emerald-600"}`}>
+                                {bucket.delta > 0 ? "+" : ""}{fmtMoney(bucket.delta)}
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <span className={`tabular-nums text-xs font-medium ${bucket.delta > 0 ? "text-red-600" : bucket.delta < 0 ? "text-emerald-600" : "text-slate-400"}`}>
+                            {bucket.delta !== 0 ? `${bucket.delta > 0 ? "+" : ""}${fmtMoney(bucket.delta)}` : "—"}
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-2.5 text-right tabular-nums font-semibold text-slate-800">{fmtMoney(bucket.total)}</td>
                     </tr>
@@ -214,11 +263,11 @@ function CurrentBillSection() {
               <tr className="border-t-2 border-slate-200 bg-slate-50">
                 <td />
                 <td className="px-4 py-3 text-sm font-semibold text-slate-700">Total</td>
-                <td className="px-4 py-3 text-right tabular-nums text-sm text-slate-500">{fmtMoney(estimate.assumptions.baselineTotal)}</td>
-                <td className={`px-4 py-3 text-right tabular-nums text-sm font-medium ${estimate.assumptions.deltaTotal > 0 ? "text-red-600" : estimate.assumptions.deltaTotal < 0 ? "text-emerald-600" : "text-slate-400"}`}>
-                  {estimate.assumptions.deltaTotal !== 0 ? `${estimate.assumptions.deltaTotal > 0 ? "+" : ""}${fmtMoney(estimate.assumptions.deltaTotal)}` : "—"}
+                <td className="px-4 py-3 text-right tabular-nums text-sm text-slate-500">{fmtMoney(adjBaseline)}</td>
+                <td className={`px-4 py-3 text-right tabular-nums text-sm font-medium ${adjDeltaTotal > 0 ? "text-red-600" : adjDeltaTotal < 0 ? "text-emerald-600" : "text-slate-400"}`}>
+                  {adjDeltaTotal !== 0 ? `${adjDeltaTotal > 0 ? "+" : ""}${fmtMoney(adjDeltaTotal)}` : "—"}
                 </td>
-                <td className="px-4 py-3 text-right tabular-nums text-sm font-bold text-slate-800">{fmtMoney(estimate.grandTotal)}</td>
+                <td className="px-4 py-3 text-right tabular-nums text-sm font-bold text-slate-800">{fmtMoney(adjGrandTotal)}</td>
               </tr>
             </tbody>
           </table>
@@ -658,6 +707,145 @@ function IronscalesTab() {
   );
 }
 
+// ── Azure Cost tab ────────────────────────────────────────────────────────────
+
+function AzureCostTable({ result, title }: { result: AzureCostResult; title: string }) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-slate-700">{title}</h3>
+        <span className="text-xs text-slate-400">
+          Total: <span className="font-semibold text-slate-700">{fmtMoney(result.totalCost)}</span>
+          {" · "}{result.currency}{" · "}as of {result.asOfDate}
+        </span>
+      </div>
+      <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-slate-200 bg-slate-50 text-left">
+              <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-widest text-slate-400">Name</th>
+              <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-widest text-slate-400 text-right">Cost</th>
+              <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-widest text-slate-400 text-right">% of Total</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {result.rows.map((row, i) => {
+              const pct = result.totalCost > 0 ? (row.cost / result.totalCost) * 100 : 0;
+              return (
+                <tr key={i} className="hover:bg-slate-50">
+                  <td className="px-4 py-2.5 font-medium text-slate-700">{row.name}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums text-slate-600">{fmtMoney(row.cost)}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums text-xs text-slate-400">
+                    <div className="flex items-center justify-end gap-2">
+                      <div className="h-1.5 w-20 rounded-full bg-slate-100">
+                        <div
+                          className="h-1.5 rounded-full bg-blue-400"
+                          style={{ width: `${Math.min(pct, 100)}%` }}
+                        />
+                      </div>
+                      {pct.toFixed(1)}%
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+            {result.rows.length === 0 && (
+              <tr>
+                <td colSpan={3} className="py-10 text-center text-sm text-slate-400">No cost data returned.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function AzureCostTab() {
+  const [loading, setLoading] = useState(false);
+  const [data, setData]       = useState<AzureCostResponse | null>(null);
+  const [error, setError]     = useState<string | null>(null);
+  const [unconfigured, setUnconfigured] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    setError(null);
+    setUnconfigured(false);
+    try {
+      const res  = await fetch("/api/azure/cost");
+      const json = await res.json() as AzureCostResponse | AzureCostErrorResponse;
+      if (!json.ok) {
+        const err = (json as AzureCostErrorResponse).error;
+        if (res.status === 400) setUnconfigured(true);
+        else setError(err);
+        return;
+      }
+      setData(json as AzureCostResponse);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center gap-3">
+        <button
+          onClick={load}
+          disabled={loading}
+          className="h-9 rounded-md bg-blue-600 px-4 text-sm font-medium text-white shadow-sm hover:bg-blue-700 disabled:opacity-50"
+        >
+          {loading ? "Loading…" : data ? "Refresh" : "Load Azure Cost data"}
+        </button>
+        {data && (
+          <span className="text-xs text-slate-400">
+            {data.byCustomer.rows.length} entries · scope: <code className="rounded bg-slate-100 px-1 py-0.5 text-[10px]">{data.byCustomer.scope}</code>
+          </span>
+        )}
+      </div>
+
+      {error && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
+      )}
+
+      {unconfigured && (
+        <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-slate-200 py-16 text-center">
+          <svg className="mb-3 size-8 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M2.25 15a4.5 4.5 0 004.5 4.5H18a3.75 3.75 0 001.332-7.257 3 3 0 00-3.758-3.848 5.25 5.25 0 00-10.233 2.33A4.502 4.502 0 002.25 15z" />
+          </svg>
+          <p className="text-sm font-medium text-slate-500">Azure Cost Management not configured</p>
+          <p className="mt-1 text-xs text-slate-400">Add credentials in <strong>Settings → Azure Cost Management</strong></p>
+        </div>
+      )}
+
+      {data && (
+        <>
+          {/* Summary banner */}
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            <MetricCard label="Total MTD spend"    value={fmtMoney(data.byCustomer.totalCost)} tone="neutral" />
+            <MetricCard label="Customers/Subs"     value={data.byCustomer.rows.length}          tone="neutral" />
+            <MetricCard label="Services in use"    value={data.byService.rows.length}            tone="neutral" />
+          </div>
+
+          <AzureCostTable result={data.byCustomer} title="By Customer / Subscription" />
+          <AzureCostTable result={data.byService}  title="By Azure Service" />
+        </>
+      )}
+
+      {!data && !loading && !error && !unconfigured && (
+        <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-slate-200 py-16 text-center">
+          <svg className="mb-3 size-8 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M2.25 15a4.5 4.5 0 004.5 4.5H18a3.75 3.75 0 001.332-7.257 3 3 0 00-3.758-3.848 5.25 5.25 0 00-10.233 2.33A4.502 4.502 0 002.25 15z" />
+          </svg>
+          <p className="text-sm font-medium text-slate-500">Click &ldquo;Load Azure Cost data&rdquo; to fetch month-to-date spend</p>
+          <p className="mt-1 text-xs text-slate-400">Requires Azure Cost Management credentials in Settings</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function Pax8Client() {
@@ -795,6 +983,7 @@ export default function Pax8Client() {
           {tab === "clients" && <ClientsTab summary={detail.summary} />}
           {tab === "lineitems" && <LineItemsTab items={detail.items} />}
           {tab === "ironscales" && <IronscalesTab />}
+          {tab === "azure"      && <AzureCostTab />}
         </>
       )}
 

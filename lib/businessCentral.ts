@@ -850,3 +850,164 @@ export async function getSelectedCompany(): Promise<BcCompany | null> {
     ) ?? null
   );
 }
+
+// ─── Sales Tax ────────────────────────────────────────────────────────────────
+
+export type BcTaxArea = {
+  id: string;
+  code: string;
+  displayName: string;
+};
+
+export type BcTaxGroup = {
+  id: string;
+  code: string;
+  displayName: string;
+  taxType?: string;
+};
+
+export type BcCustomerForTax = {
+  id: string;
+  number: string;
+  displayName: string;
+  addressLine1?: string;
+  addressLine2?: string;
+  city?: string;
+  state?: string;
+  country?: string;
+  postalCode?: string;
+  taxAreaId?: string;
+  taxAreaDisplayName?: string;
+  taxRegistrationNumber?: string;
+  taxLiable?: boolean;
+};
+
+export type BcSalesInvoiceLine = {
+  id: string;
+  documentId: string;
+  sequence: number;
+  description?: string;
+  taxCode?: string;
+  taxPercent?: number;
+  totalTaxAmount?: number;
+  amountExcludingTax?: number;
+  amountIncludingTax?: number;
+  netAmount?: number;
+  netTaxAmount?: number;
+  netAmountIncludingTax?: number;
+};
+
+export type BcSalesInvoiceWithLines = BcSalesInvoice & {
+  postingDate?: string;
+  totalTaxAmount?: number;
+  totalAmountExcludingTax?: number;
+  salesInvoiceLines: BcSalesInvoiceLine[];
+};
+
+export type BcSalesCreditMemoWithLines = BcSalesCreditMemo & {
+  postingDate?: string;
+  invoiceDate?: string;
+  totalTaxAmount?: number;
+  totalAmountExcludingTax?: number;
+  salesCreditMemoLines: BcSalesInvoiceLine[];
+};
+
+export async function listTaxAreas(): Promise<BcTaxArea[]> {
+  const companyId = await getSelectedCompanyId();
+  const out: BcTaxArea[] = [];
+  let next: string | null = `/companies(${companyId})/taxAreas`;
+  while (next) {
+    const page: BcPage<BcTaxArea> = next.startsWith("http")
+      ? await bcGetAbsolute<BcPage<BcTaxArea>>(next)
+      : await bcGet<BcPage<BcTaxArea>>(next);
+    out.push(...page.value);
+    next = page["@odata.nextLink"] ?? null;
+  }
+  return out;
+}
+
+export async function listTaxGroups(): Promise<BcTaxGroup[]> {
+  const companyId = await getSelectedCompanyId();
+  const out: BcTaxGroup[] = [];
+  let next: string | null = `/companies(${companyId})/taxGroups`;
+  while (next) {
+    const page: BcPage<BcTaxGroup> = next.startsWith("http")
+      ? await bcGetAbsolute<BcPage<BcTaxGroup>>(next)
+      : await bcGet<BcPage<BcTaxGroup>>(next);
+    out.push(...page.value);
+    next = page["@odata.nextLink"] ?? null;
+  }
+  return out;
+}
+
+export async function listCustomersForTax(): Promise<BcCustomerForTax[]> {
+  const companyId = await getSelectedCompanyId();
+  const path =
+    `/companies(${companyId})/customers?` +
+    `$select=id,number,displayName,addressLine1,addressLine2,city,state,country,postalCode,taxAreaId,taxAreaDisplayName,taxRegistrationNumber,taxLiable`;
+  const out: BcCustomerForTax[] = [];
+  let next: string | null = path;
+  while (next) {
+    const page: BcPage<BcCustomerForTax> = next.startsWith("http")
+      ? await bcGetAbsolute<BcPage<BcCustomerForTax>>(next)
+      : await bcGet<BcPage<BcCustomerForTax>>(next);
+    out.push(...page.value);
+    next = page["@odata.nextLink"] ?? null;
+  }
+  return out;
+}
+
+/**
+ * Posted sales invoices with lines expanded, for invoices in [startDate, endDate].
+ * Uses $expand=salesInvoiceLines to pull invoice-header + tax-bearing lines in
+ * a single round-trip per page.
+ */
+export async function listSalesInvoicesWithLines(
+  startDate: string,
+  endDate: string
+): Promise<BcSalesInvoiceWithLines[]> {
+  const companyId = await getSelectedCompanyId();
+  const filter = `invoiceDate ge ${startDate} and invoiceDate le ${endDate}`;
+  const path =
+    `/companies(${companyId})/salesInvoices?` +
+    `$filter=${encodeURIComponent(filter)}&` +
+    `$expand=salesInvoiceLines&` +
+    `$orderby=invoiceDate`;
+  const out: BcSalesInvoiceWithLines[] = [];
+  let next: string | null = path;
+  while (next) {
+    const page: BcPage<BcSalesInvoiceWithLines> = next.startsWith("http")
+      ? await bcGetAbsolute<BcPage<BcSalesInvoiceWithLines>>(next)
+      : await bcGet<BcPage<BcSalesInvoiceWithLines>>(next);
+    out.push(...page.value);
+    next = page["@odata.nextLink"] ?? null;
+  }
+  return out;
+}
+
+/**
+ * Posted sales credit memos with lines expanded, in [startDate, endDate].
+ * Credit memos reduce collected tax — callers should negate the line amounts.
+ */
+export async function listSalesCreditMemosWithLines(
+  startDate: string,
+  endDate: string
+): Promise<BcSalesCreditMemoWithLines[]> {
+  const companyId = await getSelectedCompanyId();
+  const filter = `postingDate ge ${startDate} and postingDate le ${endDate}`;
+  const path =
+    `/companies(${companyId})/salesCreditMemos?` +
+    `$filter=${encodeURIComponent(filter)}&` +
+    `$expand=salesCreditMemoLines&` +
+    `$orderby=postingDate`;
+  const out: BcSalesCreditMemoWithLines[] = [];
+  let next: string | null = path;
+  while (next) {
+    const page: BcPage<BcSalesCreditMemoWithLines> = next.startsWith("http")
+      ? await bcGetAbsolute<BcPage<BcSalesCreditMemoWithLines>>(next)
+      : await bcGet<BcPage<BcSalesCreditMemoWithLines>>(next);
+    out.push(...page.value);
+    next = page["@odata.nextLink"] ?? null;
+  }
+  return out;
+}

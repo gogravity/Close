@@ -10,6 +10,7 @@ const ITEMS: Item[] = [
   { href: "/data-prep/payroll", label: "Payroll" },
   { href: "/data-prep/expense-checklist", label: "Expense Checklist" },
   { href: "/data-prep/pax8", label: "Pax8 Bill" },
+  { href: "/data-prep/sales-tax", label: "Sales Tax" },
 ];
 
 export default async function DataPrepNav() {

@@ -7,18 +7,31 @@ type Customer = {
   customerNumber: string;
   name: string;
   balanceDue: number;
-  currentAmount: number;
-  period1Amount: number;
-  period2Amount: number;
-  period3Amount: number;
+  current: number;
+  d1to60: number;
+  d61to90: number;
+  d91to180: number;
+  d181to360: number;
+  over360: number;
 };
 
 type Totals = {
   balanceDue: number;
   current: number;
-  period1: number;
-  period2: number;
-  period3: number;
+  d1to60: number;
+  d61to90: number;
+  d91to180: number;
+  d181to360: number;
+  over360: number;
+};
+
+type AllowanceRates = {
+  current: number;
+  d1to60: number;
+  d61to90: number;
+  d91to180: number;
+  d181to360: number;
+  over360: number;
 };
 
 export type PostableAccount = {
@@ -53,7 +66,6 @@ export type BcLedgerEntry = {
 type Props = {
   periodEnd: string;
   asOfDate: string;
-  periodLengthFilter: string;
   totals: Totals;
   customers: Customer[];
   arGlBalance: number;
@@ -61,7 +73,7 @@ type Props = {
   allowanceGlBalance: number;
   badDebtAccount: PostableAccount | null;      // auto-detected from BC chart
   initialInput: {
-    allowanceRates: { current: number; period1: number; period2: number; period3: number };
+    allowanceRates: AllowanceRates;
     notes?: string;
   };
   hideCustomerDetail?: boolean;
@@ -76,7 +88,6 @@ function toPct(v: number): string {
 export default function ArReconClient({
   periodEnd,
   asOfDate,
-  periodLengthFilter,
   totals,
   customers,
   arGlBalance,
@@ -95,17 +106,21 @@ export default function ArReconClient({
   const allowanceByBucket = useMemo(
     () => ({
       current: totals.current * rates.current,
-      period1: totals.period1 * rates.period1,
-      period2: totals.period2 * rates.period2,
-      period3: totals.period3 * rates.period3,
+      d1to60: totals.d1to60 * rates.d1to60,
+      d61to90: totals.d61to90 * rates.d61to90,
+      d91to180: totals.d91to180 * rates.d91to180,
+      d181to360: totals.d181to360 * rates.d181to360,
+      over360: totals.over360 * rates.over360,
     }),
     [totals, rates]
   );
   const expectedAllowance =
     allowanceByBucket.current +
-    allowanceByBucket.period1 +
-    allowanceByBucket.period2 +
-    allowanceByBucket.period3;
+    allowanceByBucket.d1to60 +
+    allowanceByBucket.d61to90 +
+    allowanceByBucket.d91to180 +
+    allowanceByBucket.d181to360 +
+    allowanceByBucket.over360;
 
   // Allowance is stored as a negative number in GL (contra-asset).
   const currentAllowance = Math.abs(allowanceGlBalance);
@@ -133,7 +148,7 @@ export default function ArReconClient({
       {/* Aging bucket + allowance matrix */}
       <div className="rounded border border-slate-200 bg-white">
         <div className="border-b border-slate-200 px-4 py-2 text-sm font-semibold text-slate-900">
-          Aging & Allowance — as of {asOfDate} ({periodLengthFilter} buckets)
+          Aging & Allowance — as of {asOfDate}
         </div>
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-slate-600">
@@ -149,9 +164,11 @@ export default function ArReconClient({
             {(
               [
                 { key: "current", label: "Current", amt: totals.current, rate: rates.current, alw: allowanceByBucket.current },
-                { key: "period1", label: "31 - 60 days", amt: totals.period1, rate: rates.period1, alw: allowanceByBucket.period1 },
-                { key: "period2", label: "61 - 90 days", amt: totals.period2, rate: rates.period2, alw: allowanceByBucket.period2 },
-                { key: "period3", label: "Over 90 days", amt: totals.period3, rate: rates.period3, alw: allowanceByBucket.period3 },
+                { key: "d1to60", label: "1 - 60 days", amt: totals.d1to60, rate: rates.d1to60, alw: allowanceByBucket.d1to60 },
+                { key: "d61to90", label: "61 - 90 days", amt: totals.d61to90, rate: rates.d61to90, alw: allowanceByBucket.d61to90 },
+                { key: "d91to180", label: "91 - 180 days", amt: totals.d91to180, rate: rates.d91to180, alw: allowanceByBucket.d91to180 },
+                { key: "d181to360", label: "181 - 360 days", amt: totals.d181to360, rate: rates.d181to360, alw: allowanceByBucket.d181to360 },
+                { key: "over360", label: "Over 360 days", amt: totals.over360, rate: rates.over360, alw: allowanceByBucket.over360 },
               ] as const
             ).map((row) => {
               const pct = totals.balanceDue !== 0 ? row.amt / totals.balanceDue : 0;
@@ -257,9 +274,11 @@ export default function ArReconClient({
                 <th className="px-3 py-2 text-left font-medium w-[80px]">Customer</th>
                 <th className="px-3 py-2 text-left font-medium">Name</th>
                 <th className="px-3 py-2 text-right font-medium">Current</th>
-                <th className="px-3 py-2 text-right font-medium">31-60</th>
+                <th className="px-3 py-2 text-right font-medium">1-60</th>
                 <th className="px-3 py-2 text-right font-medium">61-90</th>
-                <th className="px-3 py-2 text-right font-medium">91+</th>
+                <th className="px-3 py-2 text-right font-medium">91-180</th>
+                <th className="px-3 py-2 text-right font-medium">181-360</th>
+                <th className="px-3 py-2 text-right font-medium">&gt;360</th>
                 <th className="px-3 py-2 text-right font-medium">Total</th>
               </tr>
             </thead>
@@ -270,10 +289,12 @@ export default function ArReconClient({
                     {c.customerNumber}
                   </td>
                   <td className="px-3 py-1 truncate max-w-[260px]">{c.name}</td>
-                  <td className="px-3 py-1 text-right tabular-nums">{c.currentAmount === 0 ? "" : fmt(c.currentAmount)}</td>
-                  <td className="px-3 py-1 text-right tabular-nums">{c.period1Amount === 0 ? "" : fmt(c.period1Amount)}</td>
-                  <td className="px-3 py-1 text-right tabular-nums">{c.period2Amount === 0 ? "" : fmt(c.period2Amount)}</td>
-                  <td className="px-3 py-1 text-right tabular-nums">{c.period3Amount === 0 ? "" : fmt(c.period3Amount)}</td>
+                  <td className="px-3 py-1 text-right tabular-nums">{c.current === 0 ? "" : fmt(c.current)}</td>
+                  <td className="px-3 py-1 text-right tabular-nums">{c.d1to60 === 0 ? "" : fmt(c.d1to60)}</td>
+                  <td className="px-3 py-1 text-right tabular-nums">{c.d61to90 === 0 ? "" : fmt(c.d61to90)}</td>
+                  <td className="px-3 py-1 text-right tabular-nums">{c.d91to180 === 0 ? "" : fmt(c.d91to180)}</td>
+                  <td className="px-3 py-1 text-right tabular-nums">{c.d181to360 === 0 ? "" : fmt(c.d181to360)}</td>
+                  <td className="px-3 py-1 text-right tabular-nums">{c.over360 === 0 ? "" : fmt(c.over360)}</td>
                   <td className="px-3 py-1 text-right tabular-nums font-medium">{fmt(c.balanceDue)}</td>
                 </tr>
               ))}

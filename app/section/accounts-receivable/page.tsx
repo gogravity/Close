@@ -5,7 +5,6 @@ import { getEntityConfig, getAccountMappings } from "@/lib/settings";
 import {
   listAccounts,
   getAccountBalances,
-  getAgedReceivables,
   listGlEntries,
   listOpenCustomerLedgerEntries,
   BusinessCentralError,
@@ -23,6 +22,79 @@ function periodStartOf(periodEnd: string): string {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-01`;
 }
 
+type BcEntry = {
+  id: string;
+  customerNumber: string;
+  customerName: string;
+  dueDate: string;
+  postingDate: string;
+  remainingAmount: number;
+};
+
+type AgingBuckets = {
+  current: number;
+  d1to60: number;
+  d61to90: number;
+  d91to180: number;
+  d181to360: number;
+  over360: number;
+};
+
+type AgingCustomer = AgingBuckets & {
+  customerNumber: string;
+  name: string;
+  balanceDue: number;
+};
+
+function emptyBuckets(): AgingBuckets {
+  return { current: 0, d1to60: 0, d61to90: 0, d91to180: 0, d181to360: 0, over360: 0 };
+}
+
+function bucketKey(daysPast: number): keyof AgingBuckets {
+  if (daysPast <= 0) return "current";
+  if (daysPast <= 60) return "d1to60";
+  if (daysPast <= 90) return "d61to90";
+  if (daysPast <= 180) return "d91to180";
+  if (daysPast <= 360) return "d181to360";
+  return "over360";
+}
+
+function computeAging(entries: BcEntry[], asOf: string) {
+  const asOfMs = new Date(asOf).getTime();
+  const totals: AgingBuckets = emptyBuckets();
+  const byCustomer = new Map<string, AgingCustomer>();
+  let balanceDue = 0;
+
+  for (const e of entries) {
+    if (!e.remainingAmount) continue;
+    const refDate = e.dueDate || e.postingDate;
+    const daysPast = refDate
+      ? Math.floor((asOfMs - new Date(refDate).getTime()) / 86_400_000)
+      : 0;
+    const key = bucketKey(daysPast);
+    totals[key] += e.remainingAmount;
+    balanceDue += e.remainingAmount;
+
+    let cust = byCustomer.get(e.customerNumber);
+    if (!cust) {
+      cust = {
+        customerNumber: e.customerNumber,
+        name: e.customerName,
+        balanceDue: 0,
+        ...emptyBuckets(),
+      };
+      byCustomer.set(e.customerNumber, cust);
+    }
+    cust[key] += e.remainingAmount;
+    cust.balanceDue += e.remainingAmount;
+  }
+
+  return {
+    asOfDate: asOf,
+    totals: { balanceDue, ...totals },
+    customers: Array.from(byCustomer.values()).sort((a, b) => b.balanceDue - a.balanceDue),
+  };
+}
 
 type TabKey = "rec" | "aging" | "alt-payments" | "alt-activity";
 
@@ -47,12 +119,11 @@ export default async function ArSectionPage({
     // Use a wide CW lookback to catch all open invoices regardless of age
     const cwLookbackStart = `${new Date().getUTCFullYear() - 3}-01-01`;
 
-    const [accounts, balances, mappings, aging, input, cwInvoicesRaw, bcLedgerRaw] =
+    const [accounts, balances, mappings, input, cwInvoicesRaw, bcLedgerRaw] =
       await Promise.all([
         listAccounts(),
         getAccountBalances(periodEnd),
         getAccountMappings(),
-        getAgedReceivables(),
         getArReconInput(periodEnd),
         listInvoices(cwLookbackStart, periodEnd).catch(() => []),
         // BC Customer Ledger Entries — all open entries, includes invoices + credit memos
@@ -86,6 +157,10 @@ export default async function ArSectionPage({
       amount: e.amount,
       remainingAmount: e.remainingAmount,
     }));
+
+    // Compute aging client-side into the 6-bucket corporate schedule
+    // (0 / 1-60 / 61-90 / 91-180 / 181-360 / >360 days past due).
+    const aging = computeAging(bcOpenInvoices, periodEnd);
 
     const arAccountNumbers = Object.entries(mappings)
       .filter(([, slug]) => slug === "accounts-receivable")
@@ -173,17 +248,8 @@ export default async function ArSectionPage({
           <ArReconClient
             periodEnd={periodEnd}
             asOfDate={aging.asOfDate}
-            periodLengthFilter={aging.periodLengthFilter}
-            totals={aging.total}
-            customers={aging.customers.map((c) => ({
-              customerNumber: c.customerNumber,
-              name: c.name,
-              balanceDue: c.balanceDue,
-              currentAmount: c.currentAmount,
-              period1Amount: c.period1Amount,
-              period2Amount: c.period2Amount,
-              period3Amount: c.period3Amount,
-            }))}
+            totals={aging.totals}
+            customers={aging.customers}
             arGlBalance={arGlBalance}
             allowanceAccount={
               allowanceAcct
@@ -211,17 +277,8 @@ export default async function ArSectionPage({
         {activeTab === "aging" && (
           <ArAgingPane
             asOfDate={aging.asOfDate}
-            periodLengthFilter={aging.periodLengthFilter}
-            totals={aging.total}
-            customers={aging.customers.map((c) => ({
-              customerNumber: c.customerNumber,
-              name: c.name,
-              balanceDue: c.balanceDue,
-              currentAmount: c.currentAmount,
-              period1Amount: c.period1Amount,
-              period2Amount: c.period2Amount,
-              period3Amount: c.period3Amount,
-            }))}
+            totals={aging.totals}
+            customers={aging.customers}
           />
         )}
 

@@ -4,30 +4,32 @@ import "server-only";
 
 const INPUTS_FILE = path.join(process.cwd(), ".data", "ar-recon-inputs.json");
 
-/**
- * Allowance rates for each aging bucket, per reconciliation period.
- * Defaults mirror Gravity's historical allowance matrix on the Excel AR tab.
- */
+export type AllowanceRates = {
+  current: number;
+  d1to60: number;
+  d61to90: number;
+  d91to180: number;
+  d181to360: number;
+  over360: number;
+};
+
 export type ArReconInput = {
   /**
    * Allowance rates are corporate policy set by Lyra and are not user-editable.
    * They are stored per period for audit trail only.
    */
-  allowanceRates: {
-    current: number;
-    period1: number; // 31-60 days
-    period2: number; // 61-90 days
-    period3: number; // 91+ days
-  };
+  allowanceRates: AllowanceRates;
   badDebtExpenseAccountNumber?: string;
   notes?: string;
 };
 
-export const DEFAULT_RATES: ArReconInput["allowanceRates"] = {
+export const DEFAULT_RATES: AllowanceRates = {
   current: 0,
-  period1: 0.05,
-  period2: 0.10,
-  period3: 0.50,
+  d1to60: 0.05,
+  d61to90: 0.10,
+  d91to180: 0.20,
+  d181to360: 0.50,
+  over360: 1.00,
 };
 
 type StoredInputs = Record<string /* period */, ArReconInput>;
@@ -48,11 +50,13 @@ async function writeRaw(data: StoredInputs): Promise<void> {
 
 export async function getArReconInput(period: string): Promise<ArReconInput> {
   const data = await readRaw();
-  return (
-    data[period] ?? {
-      allowanceRates: { ...DEFAULT_RATES },
-    }
-  );
+  const stored = data[period];
+  if (!stored) {
+    return { allowanceRates: { ...DEFAULT_RATES } };
+  }
+  // Always use current corporate policy rates regardless of what was stored
+  // under the old 4-bucket schema.
+  return { ...stored, allowanceRates: { ...DEFAULT_RATES } };
 }
 
 export async function setArReconInput(period: string, input: ArReconInput): Promise<void> {

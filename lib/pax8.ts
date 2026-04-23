@@ -23,6 +23,9 @@ export class Pax8Error extends Error {
 let _tokenCache: { token: string; expiresAt: number } | null = null;
 
 async function getCredentials(): Promise<{ clientId: string; clientSecret: string }> {
+  const envId = process.env.PAX8_CLIENT_ID;
+  const envSecret = process.env.PAX8_CLIENT_SECRET;
+  if (envId && envSecret) return { clientId: envId, clientSecret: envSecret };
   const s = await getIntegrationSecrets("pax8");
   if (!s.clientId || !s.clientSecret)
     throw new Pax8Error("Pax8 credentials not configured — add them in Settings → Pax8", 400);

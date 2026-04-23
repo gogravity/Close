@@ -49,6 +49,10 @@ export default function SalesTaxClient({
   const [groupBy, setGroupBy] = useState<GroupKey>("state");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [excludeVoip, setExcludeVoip] = useState(false);
+  const [subExpanded, setSubExpanded] = useState<Record<string, boolean>>({});
+
+  const toggleSub = (k: string) =>
+    setSubExpanded((p) => ({ ...p, [k]: !(p[k] ?? false) }));
 
   // VoIP invoices come from Datagate and their doc numbers start with "DG".
   const filteredRows = useMemo(
@@ -239,57 +243,12 @@ export default function SalesTaxClient({
                     <tr key={`${g.key}-detail`} className="border-t border-slate-100 bg-slate-50/50">
                       <td></td>
                       <td colSpan={5} className="px-4 py-3">
-                        <table className="w-full text-xs">
-                          <thead className="text-slate-500">
-                            <tr>
-                              <th className="px-2 py-1 text-left font-medium">Doc #</th>
-                              <th className="px-2 py-1 text-left font-medium">Type</th>
-                              <th className="px-2 py-1 text-left font-medium">Date</th>
-                              <th className="px-2 py-1 text-left font-medium">Customer</th>
-                              <th className="px-2 py-1 text-left font-medium">State/City</th>
-                              <th className="px-2 py-1 text-left font-medium">Tax Code</th>
-                              <th className="px-2 py-1 text-right font-medium">Rate</th>
-                              <th className="px-2 py-1 text-right font-medium">Taxable</th>
-                              <th className="px-2 py-1 text-right font-medium">Tax</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {g.rows
-                              .slice()
-                              .sort((a, b) => Math.abs(b.taxAmount) - Math.abs(a.taxAmount))
-                              .map((r, i) => (
-                                <tr key={`${r.docId}-${i}`} className="border-t border-slate-200">
-                                  <td className="px-2 py-1 font-mono text-[11px]">
-                                    {r.docNumber}
-                                  </td>
-                                  <td className="px-2 py-1 text-slate-500">
-                                    {r.docType === "Credit Memo" ? "CM" : "Inv"}
-                                  </td>
-                                  <td className="px-2 py-1 tabular-nums text-slate-500">
-                                    {r.docDate}
-                                  </td>
-                                  <td className="px-2 py-1 max-w-[180px] truncate" title={r.customerName}>
-                                    {r.customerName}
-                                  </td>
-                                  <td className="px-2 py-1 text-slate-500">
-                                    {r.state}{r.city ? ` / ${r.city}` : ""}
-                                  </td>
-                                  <td className="px-2 py-1 font-mono text-[11px]">
-                                    {r.taxCode}
-                                  </td>
-                                  <td className="px-2 py-1 text-right tabular-nums text-slate-500">
-                                    {r.taxPercent ? pctFmt(r.taxPercent) : ""}
-                                  </td>
-                                  <td className="px-2 py-1 text-right tabular-nums">
-                                    {fmt(r.taxableAmount)}
-                                  </td>
-                                  <td className="px-2 py-1 text-right tabular-nums font-medium">
-                                    {fmt(r.taxAmount)}
-                                  </td>
-                                </tr>
-                              ))}
-                          </tbody>
-                        </table>
+                        <JurisdictionBreakdown
+                          parentKey={g.key}
+                          rows={g.rows}
+                          subExpanded={subExpanded}
+                          toggleSub={toggleSub}
+                        />
                       </td>
                     </tr>
                   )}
@@ -384,6 +343,145 @@ export default function SalesTaxClient({
         Period: {periodStart} → {periodEnd}
       </div>
     </div>
+  );
+}
+
+function JurisdictionBreakdown({
+  parentKey,
+  rows,
+  subExpanded,
+  toggleSub,
+}: {
+  parentKey: string;
+  rows: TaxTransactionRow[];
+  subExpanded: Record<string, boolean>;
+  toggleSub: (k: string) => void;
+}) {
+  // Group the parent group's rows by (rate + jurisdiction). Jurisdiction is
+  // taxAreaDisplayName if present, otherwise the customer state.
+  type SubBucket = {
+    key: string;
+    rate: number;
+    jurisdiction: string;
+    taxable: number;
+    tax: number;
+    rows: TaxTransactionRow[];
+  };
+  const m = new Map<string, SubBucket>();
+  for (const r of rows) {
+    const rate = Number((r.taxPercent ?? 0).toFixed(3));
+    const jurisdiction = r.taxAreaDisplayName || r.state || "—";
+    const k = `${rate}|${jurisdiction}`;
+    let b = m.get(k);
+    if (!b) {
+      b = { key: k, rate, jurisdiction, taxable: 0, tax: 0, rows: [] };
+      m.set(k, b);
+    }
+    b.taxable += r.taxableAmount;
+    b.tax += r.taxAmount;
+    b.rows.push(r);
+  }
+  const buckets = Array.from(m.values()).sort(
+    (a, b) => Math.abs(b.tax) - Math.abs(a.tax)
+  );
+
+  return (
+    <table className="w-full text-xs">
+      <thead className="text-slate-500">
+        <tr>
+          <th className="px-2 py-1 text-left font-medium w-[24px]"></th>
+          <th className="px-2 py-1 text-left font-medium w-[80px]">Rate</th>
+          <th className="px-2 py-1 text-left font-medium">Jurisdiction</th>
+          <th className="px-2 py-1 text-right font-medium">Taxable</th>
+          <th className="px-2 py-1 text-right font-medium">Tax</th>
+          <th className="px-2 py-1 text-right font-medium">Lines</th>
+        </tr>
+      </thead>
+      <tbody>
+        {buckets.map((b) => {
+          const subKey = `${parentKey}|${b.key}`;
+          const isOpen = subExpanded[subKey] ?? false;
+          return (
+            <>
+              <tr
+                key={subKey}
+                className="border-t border-slate-200 cursor-pointer hover:bg-white"
+                onClick={() => toggleSub(subKey)}
+              >
+                <td className="px-2 py-1 text-center text-slate-400">
+                  {isOpen ? "▾" : "▸"}
+                </td>
+                <td className="px-2 py-1 tabular-nums text-slate-700">
+                  {b.rate.toFixed(2)}%
+                </td>
+                <td className="px-2 py-1 text-slate-700">{b.jurisdiction}</td>
+                <td className="px-2 py-1 text-right tabular-nums">{fmt(b.taxable)}</td>
+                <td className="px-2 py-1 text-right tabular-nums font-medium">
+                  {fmt(b.tax)}
+                </td>
+                <td className="px-2 py-1 text-right tabular-nums text-slate-500">
+                  {b.rows.length}
+                </td>
+              </tr>
+              {isOpen && (
+                <tr key={`${subKey}-lines`} className="bg-white">
+                  <td></td>
+                  <td colSpan={5} className="px-2 py-2">
+                    <table className="w-full text-[11px]">
+                      <thead className="text-slate-500">
+                        <tr>
+                          <th className="px-2 py-1 text-left font-medium">Doc #</th>
+                          <th className="px-2 py-1 text-left font-medium">Type</th>
+                          <th className="px-2 py-1 text-left font-medium">Date</th>
+                          <th className="px-2 py-1 text-left font-medium">Customer</th>
+                          <th className="px-2 py-1 text-left font-medium">State/City</th>
+                          <th className="px-2 py-1 text-left font-medium">Tax Code</th>
+                          <th className="px-2 py-1 text-right font-medium">Taxable</th>
+                          <th className="px-2 py-1 text-right font-medium">Tax</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {b.rows
+                          .slice()
+                          .sort((a, b) => Math.abs(b.taxAmount) - Math.abs(a.taxAmount))
+                          .map((r, i) => (
+                            <tr key={`${r.docId}-${i}`} className="border-t border-slate-100">
+                              <td className="px-2 py-1 font-mono">{r.docNumber}</td>
+                              <td className="px-2 py-1 text-slate-500">
+                                {r.docType === "Credit Memo" ? "CM" : "Inv"}
+                              </td>
+                              <td className="px-2 py-1 tabular-nums text-slate-500">
+                                {r.docDate}
+                              </td>
+                              <td
+                                className="px-2 py-1 max-w-[180px] truncate"
+                                title={r.customerName}
+                              >
+                                {r.customerName}
+                              </td>
+                              <td className="px-2 py-1 text-slate-500">
+                                {r.state}
+                                {r.city ? ` / ${r.city}` : ""}
+                              </td>
+                              <td className="px-2 py-1 font-mono">{r.taxCode}</td>
+                              <td className="px-2 py-1 text-right tabular-nums">
+                                {fmt(r.taxableAmount)}
+                              </td>
+                              <td className="px-2 py-1 text-right tabular-nums font-medium">
+                                {fmt(r.taxAmount)}
+                              </td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </td>
+                </tr>
+              )}
+            </>
+          );
+        })}
+      </tbody>
+    </table>
   );
 }
 

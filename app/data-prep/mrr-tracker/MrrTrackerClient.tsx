@@ -72,10 +72,17 @@ export default function MrrTrackerClient({ defaultEndMonth }: Props) {
   const currentMonth = months[months.length - 1];
   const priorMonth = months[months.length - 2];
 
+  // Only recurring revenue accounts (400xxx, 402xxx).
+  // Non-recurring accounts (403xxx T&M, 405xxx Professional Services,
+  // 407xxx Hardware/Software Resale) are excluded from MRR tracking.
+  const MRR_PREFIXES = ["400", "402"];
+
   const incomeAccounts = useMemo(() => {
     if (!result) return [];
     const income = result.categories.find((c) => c.category === "Income");
-    return income?.accounts ?? [];
+    return (income?.accounts ?? []).filter((a) =>
+      MRR_PREFIXES.some((p) => a.accountNumber.startsWith(p))
+    );
   }, [result]);
 
   const totals = useMemo(() => {

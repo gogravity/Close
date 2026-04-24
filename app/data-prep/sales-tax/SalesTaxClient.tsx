@@ -346,6 +346,48 @@ export default function SalesTaxClient({
   );
 }
 
+function InvoiceLines({ rows }: { rows: TaxTransactionRow[] }) {
+  return (
+    <table className="w-full text-[11px]">
+      <thead className="text-slate-500">
+        <tr>
+          <th className="px-2 py-1 text-left font-medium">Doc #</th>
+          <th className="px-2 py-1 text-left font-medium">Type</th>
+          <th className="px-2 py-1 text-left font-medium">Date</th>
+          <th className="px-2 py-1 text-left font-medium">Customer</th>
+          <th className="px-2 py-1 text-left font-medium">State/City</th>
+          <th className="px-2 py-1 text-left font-medium">Tax Code</th>
+          <th className="px-2 py-1 text-right font-medium">Taxable</th>
+          <th className="px-2 py-1 text-right font-medium">Tax</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows
+          .slice()
+          .sort((a, b) => Math.abs(b.taxAmount) - Math.abs(a.taxAmount))
+          .map((r, i) => (
+            <tr key={`${r.docId}-${i}`} className="border-t border-slate-100">
+              <td className="px-2 py-1 font-mono">{r.docNumber}</td>
+              <td className="px-2 py-1 text-slate-500">
+                {r.docType === "Credit Memo" ? "CM" : "Inv"}
+              </td>
+              <td className="px-2 py-1 tabular-nums text-slate-500">{r.docDate}</td>
+              <td className="px-2 py-1 max-w-[180px] truncate" title={r.customerName}>
+                {r.customerName}
+              </td>
+              <td className="px-2 py-1 text-slate-500">
+                {r.state}{r.city ? ` / ${r.city}` : ""}
+              </td>
+              <td className="px-2 py-1 font-mono">{r.taxCode}</td>
+              <td className="px-2 py-1 text-right tabular-nums">{fmt(r.taxableAmount)}</td>
+              <td className="px-2 py-1 text-right tabular-nums font-medium">{fmt(r.taxAmount)}</td>
+            </tr>
+          ))}
+      </tbody>
+    </table>
+  );
+}
+
 function JurisdictionBreakdown({
   parentKey,
   rows,
@@ -357,31 +399,26 @@ function JurisdictionBreakdown({
   subExpanded: Record<string, boolean>;
   toggleSub: (k: string) => void;
 }) {
-  // Group the parent group's rows by (rate + jurisdiction). Jurisdiction is
-  // taxAreaDisplayName if present, otherwise the customer state.
-  type SubBucket = {
-    key: string;
-    rate: number;
-    jurisdiction: string;
+  // Level 1: group by state
+  type StateBucket = {
+    state: string;
     taxable: number;
     tax: number;
     rows: TaxTransactionRow[];
   };
-  const m = new Map<string, SubBucket>();
+  const stateMap = new Map<string, StateBucket>();
   for (const r of rows) {
-    const rate = Number((r.taxPercent ?? 0).toFixed(3));
-    const jurisdiction = r.taxAreaDisplayName || r.state || "—";
-    const k = `${rate}|${jurisdiction}`;
-    let b = m.get(k);
+    const state = r.state || "—";
+    let b = stateMap.get(state);
     if (!b) {
-      b = { key: k, rate, jurisdiction, taxable: 0, tax: 0, rows: [] };
-      m.set(k, b);
+      b = { state, taxable: 0, tax: 0, rows: [] };
+      stateMap.set(state, b);
     }
     b.taxable += r.taxableAmount;
     b.tax += r.taxAmount;
     b.rows.push(r);
   }
-  const buckets = Array.from(m.values()).sort(
+  const stateBuckets = Array.from(stateMap.values()).sort(
     (a, b) => Math.abs(b.tax) - Math.abs(a.tax)
   );
 
@@ -390,93 +427,94 @@ function JurisdictionBreakdown({
       <thead className="text-slate-500">
         <tr>
           <th className="px-2 py-1 text-left font-medium w-[24px]"></th>
-          <th className="px-2 py-1 text-left font-medium w-[80px]">Rate</th>
-          <th className="px-2 py-1 text-left font-medium">Jurisdiction</th>
+          <th className="px-2 py-1 text-left font-medium">State</th>
           <th className="px-2 py-1 text-right font-medium">Taxable</th>
           <th className="px-2 py-1 text-right font-medium">Tax</th>
           <th className="px-2 py-1 text-right font-medium">Lines</th>
         </tr>
       </thead>
       <tbody>
-        {buckets.map((b) => {
-          const subKey = `${parentKey}|${b.key}`;
-          const isOpen = subExpanded[subKey] ?? false;
+        {stateBuckets.map((sb) => {
+          const stateKey = `${parentKey}|state|${sb.state}`;
+          const stateOpen = subExpanded[stateKey] ?? false;
+
+          // Level 2: group by rate + jurisdiction within this state
+          type JurisdBucket = {
+            key: string;
+            rate: number;
+            jurisdiction: string;
+            taxable: number;
+            tax: number;
+            rows: TaxTransactionRow[];
+          };
+          const jMap = new Map<string, JurisdBucket>();
+          for (const r of sb.rows) {
+            const rate = Number((r.taxPercent ?? 0).toFixed(3));
+            const jurisdiction = r.taxAreaDisplayName || r.state || "—";
+            const k = `${rate}|${jurisdiction}`;
+            let jb = jMap.get(k);
+            if (!jb) {
+              jb = { key: k, rate, jurisdiction, taxable: 0, tax: 0, rows: [] };
+              jMap.set(k, jb);
+            }
+            jb.taxable += r.taxableAmount;
+            jb.tax += r.taxAmount;
+            jb.rows.push(r);
+          }
+          const jBuckets = Array.from(jMap.values()).sort(
+            (a, b) => Math.abs(b.tax) - Math.abs(a.tax)
+          );
+
           return (
             <>
+              {/* State row */}
               <tr
-                key={subKey}
+                key={stateKey}
                 className="border-t border-slate-200 cursor-pointer hover:bg-white"
-                onClick={() => toggleSub(subKey)}
+                onClick={() => toggleSub(stateKey)}
               >
                 <td className="px-2 py-1 text-center text-slate-400">
-                  {isOpen ? "▾" : "▸"}
+                  {stateOpen ? "▾" : "▸"}
                 </td>
-                <td className="px-2 py-1 tabular-nums text-slate-700">
-                  {b.rate.toFixed(2)}%
-                </td>
-                <td className="px-2 py-1 text-slate-700">{b.jurisdiction}</td>
-                <td className="px-2 py-1 text-right tabular-nums">{fmt(b.taxable)}</td>
-                <td className="px-2 py-1 text-right tabular-nums font-medium">
-                  {fmt(b.tax)}
-                </td>
-                <td className="px-2 py-1 text-right tabular-nums text-slate-500">
-                  {b.rows.length}
-                </td>
+                <td className="px-2 py-1 font-medium text-slate-700">{sb.state}</td>
+                <td className="px-2 py-1 text-right tabular-nums">{fmt(sb.taxable)}</td>
+                <td className="px-2 py-1 text-right tabular-nums font-medium">{fmt(sb.tax)}</td>
+                <td className="px-2 py-1 text-right tabular-nums text-slate-500">{sb.rows.length}</td>
               </tr>
-              {isOpen && (
-                <tr key={`${subKey}-lines`} className="bg-white">
-                  <td></td>
-                  <td colSpan={5} className="px-2 py-2">
-                    <table className="w-full text-[11px]">
-                      <thead className="text-slate-500">
-                        <tr>
-                          <th className="px-2 py-1 text-left font-medium">Doc #</th>
-                          <th className="px-2 py-1 text-left font-medium">Type</th>
-                          <th className="px-2 py-1 text-left font-medium">Date</th>
-                          <th className="px-2 py-1 text-left font-medium">Customer</th>
-                          <th className="px-2 py-1 text-left font-medium">State/City</th>
-                          <th className="px-2 py-1 text-left font-medium">Tax Code</th>
-                          <th className="px-2 py-1 text-right font-medium">Taxable</th>
-                          <th className="px-2 py-1 text-right font-medium">Tax</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {b.rows
-                          .slice()
-                          .sort((a, b) => Math.abs(b.taxAmount) - Math.abs(a.taxAmount))
-                          .map((r, i) => (
-                            <tr key={`${r.docId}-${i}`} className="border-t border-slate-100">
-                              <td className="px-2 py-1 font-mono">{r.docNumber}</td>
-                              <td className="px-2 py-1 text-slate-500">
-                                {r.docType === "Credit Memo" ? "CM" : "Inv"}
-                              </td>
-                              <td className="px-2 py-1 tabular-nums text-slate-500">
-                                {r.docDate}
-                              </td>
-                              <td
-                                className="px-2 py-1 max-w-[180px] truncate"
-                                title={r.customerName}
-                              >
-                                {r.customerName}
-                              </td>
-                              <td className="px-2 py-1 text-slate-500">
-                                {r.state}
-                                {r.city ? ` / ${r.city}` : ""}
-                              </td>
-                              <td className="px-2 py-1 font-mono">{r.taxCode}</td>
-                              <td className="px-2 py-1 text-right tabular-nums">
-                                {fmt(r.taxableAmount)}
-                              </td>
-                              <td className="px-2 py-1 text-right tabular-nums font-medium">
-                                {fmt(r.taxAmount)}
-                              </td>
-                            </tr>
-                          ))}
-                      </tbody>
-                    </table>
-                  </td>
-                </tr>
-              )}
+
+              {stateOpen && jBuckets.map((jb) => {
+                const jKey = `${stateKey}|${jb.key}`;
+                const jOpen = subExpanded[jKey] ?? false;
+                return (
+                  <>
+                    {/* Rate + Jurisdiction row */}
+                    <tr
+                      key={jKey}
+                      className="border-t border-slate-100 cursor-pointer hover:bg-slate-50/50 bg-slate-50/30"
+                      onClick={() => toggleSub(jKey)}
+                    >
+                      <td className="px-2 py-1 text-center text-slate-400 pl-6">
+                        {jOpen ? "▾" : "▸"}
+                      </td>
+                      <td className="px-2 py-1 text-slate-600 pl-6">
+                        <span className="tabular-nums text-slate-500 mr-2">{jb.rate.toFixed(2)}%</span>
+                        {jb.jurisdiction}
+                      </td>
+                      <td className="px-2 py-1 text-right tabular-nums text-slate-600">{fmt(jb.taxable)}</td>
+                      <td className="px-2 py-1 text-right tabular-nums font-medium text-slate-700">{fmt(jb.tax)}</td>
+                      <td className="px-2 py-1 text-right tabular-nums text-slate-400">{jb.rows.length}</td>
+                    </tr>
+
+                    {jOpen && (
+                      <tr key={`${jKey}-lines`} className="bg-white">
+                        <td colSpan={5} className="px-2 py-2 pl-10">
+                          <InvoiceLines rows={jb.rows} />
+                        </td>
+                      </tr>
+                    )}
+                  </>
+                );
+              })}
             </>
           );
         })}

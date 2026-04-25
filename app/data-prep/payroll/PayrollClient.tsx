@@ -719,17 +719,19 @@ function GustoJeSection({
         >
           Generate JE
         </button>
+        {gustoEmps && (
+          <label className="flex cursor-pointer items-center gap-2 rounded border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-100">
+            <input
+              type="checkbox"
+              checked={includeCustomerBreakdown}
+              onChange={onToggleCustomerBreakdown}
+              className="h-3.5 w-3.5 rounded border-slate-300 text-slate-800 focus:ring-slate-400"
+            />
+            Split hours by customer
+          </label>
+        )}
         {je && (
           <div className="ml-auto flex items-center gap-2">
-            <label className="flex cursor-pointer items-center gap-2 rounded border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-100">
-              <input
-                type="checkbox"
-                checked={includeCustomerBreakdown}
-                onChange={onToggleCustomerBreakdown}
-                className="h-3.5 w-3.5 rounded border-slate-300 text-slate-800 focus:ring-slate-400"
-              />
-              Include per-customer breakdown
-            </label>
             <button
               type="button"
               onClick={onCopyToAccruedPayroll}

@@ -105,6 +105,7 @@ export default function PayrollClient({ defaultYear, defaultMonth, defaultHalf }
   const [gustoFileName, setGustoFileName] = useState<string>("");
   const [gustoParseError, setGustoParseError] = useState<string | null>(null);
   const [je, setJe] = useState<JournalEntry | null>(null);
+  const [includeCustomerBreakdown, setIncludeCustomerBreakdown] = useState(false);
   // When true for a member, their payroll bypasses the percentage split and
   // the entire paycheck goes to their selected dept's bucket. Used for
   // people whose CW time doesn't reflect their real role (e.g. owners who
@@ -235,7 +236,10 @@ export default function PayrollClient({ defaultYear, defaultMonth, defaultHalf }
   function downloadJeCsv() {
     if (!je) return;
     const label = result ? result.period.label : gustoFileName || "payroll";
-    const csv = jeToCsv(je, label);
+    let csv = jeToCsv(je, label);
+    if (includeCustomerBreakdown && result?.companies.length) {
+      csv += "\n\n" + customerBreakdownToCsv(je, result.companies);
+    }
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -583,6 +587,9 @@ export default function PayrollClient({ defaultYear, defaultMonth, defaultHalf }
             periodLabel={result?.period.label ?? ""}
             unmatchedDepts={unmatchedDepts}
             onUnmatchedDeptChange={setUnmatchedDept}
+            includeCustomerBreakdown={includeCustomerBreakdown}
+            onToggleCustomerBreakdown={() => setIncludeCustomerBreakdown((p) => !p)}
+            companies={result?.companies ?? []}
           />
         </>
       )}
@@ -604,6 +611,9 @@ function GustoJeSection({
   periodLabel,
   unmatchedDepts,
   onUnmatchedDeptChange,
+  includeCustomerBreakdown,
+  onToggleCustomerBreakdown,
+  companies,
 }: {
   fileInputRef: React.RefObject<HTMLInputElement | null>;
   gustoEmps: GustoEmployee[] | null;
@@ -618,6 +628,9 @@ function GustoJeSection({
   periodLabel: string;
   unmatchedDepts: Record<string, Dept>;
   onUnmatchedDeptChange: (gustoName: string, d: Dept) => void;
+  includeCustomerBreakdown: boolean;
+  onToggleCustomerBreakdown: () => void;
+  companies: Array<{ name: string; hours: number }>;
 }) {
   const matchedCount = gustoMatches.filter((m) => m.cwMember).length;
   const unmatched = gustoMatches.filter((m) => !m.cwMember);
@@ -674,7 +687,16 @@ function GustoJeSection({
           Generate JE
         </button>
         {je && (
-          <div className="ml-auto flex gap-2">
+          <div className="ml-auto flex items-center gap-2">
+            <label className="flex cursor-pointer items-center gap-2 rounded border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-100">
+              <input
+                type="checkbox"
+                checked={includeCustomerBreakdown}
+                onChange={onToggleCustomerBreakdown}
+                className="h-3.5 w-3.5 rounded border-slate-300 text-slate-800 focus:ring-slate-400"
+              />
+              Include per-customer breakdown
+            </label>
             <button
               type="button"
               onClick={onCopyToAccruedPayroll}
@@ -745,6 +767,7 @@ function GustoJeSection({
       )}
 
       {je && (
+        <>
         <div className="rounded border border-slate-200 bg-white overflow-x-auto">
           <div className="border-b border-slate-200 bg-slate-50 px-4 py-2 text-sm font-semibold text-slate-700">
             Drafted JE — {periodLabel}
@@ -836,7 +859,155 @@ function GustoJeSection({
             )}
           </div>
         </div>
+
+        {includeCustomerBreakdown && companies.length > 0 && (
+          <CustomerBreakdownTable je={je} companies={companies} />
+        )}
+        </>
       )}
     </div>
   );
+}
+
+// ── Per-customer breakdown ────────────────────────────────────────────────────
+
+// COGS buckets only — Sales/Admin are overhead, not customer-allocable.
+const COGS_BUCKETS: Bucket[] = ["managed", "recurring", "nonRecurring", "voip"];
+
+type CustomerAllocation = {
+  name: string;
+  hours: number;
+  weight: number;
+  byBucket: Record<Bucket, number>;
+  total: number;
+};
+
+function computeCustomerAllocations(
+  je: JournalEntry,
+  companies: Array<{ name: string; hours: number }>
+): CustomerAllocation[] {
+  const totalHours = companies.reduce((s, c) => s + c.hours, 0);
+  if (totalHours === 0) return [];
+
+  const bucketTotals: Record<Bucket, number> = {
+    managed: 0, recurring: 0, nonRecurring: 0, voip: 0, sales: 0, admin: 0,
+  };
+  for (const row of je.bucketRows) {
+    for (const b of COGS_BUCKETS) {
+      bucketTotals[b] += row.byBucket[b] ?? 0;
+    }
+  }
+
+  return companies
+    .filter((c) => c.hours > 0)
+    .sort((a, b) => b.hours - a.hours)
+    .map((c) => {
+      const weight = c.hours / totalHours;
+      const byBucket: Record<Bucket, number> = { managed: 0, recurring: 0, nonRecurring: 0, voip: 0, sales: 0, admin: 0 };
+      let total = 0;
+      for (const b of COGS_BUCKETS) {
+        const amt = Math.round(bucketTotals[b] * weight * 100) / 100;
+        byBucket[b] = amt;
+        total += amt;
+      }
+      return { name: c.name, hours: c.hours, weight, byBucket, total: Math.round(total * 100) / 100 };
+    });
+}
+
+function CustomerBreakdownTable({
+  je,
+  companies,
+}: {
+  je: JournalEntry;
+  companies: Array<{ name: string; hours: number }>;
+}) {
+  const rows = computeCustomerAllocations(je, companies);
+  const grandTotal = Math.round(rows.reduce((s, r) => s + r.total, 0) * 100) / 100;
+
+  return (
+    <div className="rounded border border-slate-200 bg-white overflow-x-auto">
+      <div className="border-b border-slate-200 bg-slate-50 px-4 py-2">
+        <div className="text-sm font-semibold text-slate-700">Per-Customer Cost Allocation</div>
+        <div className="text-[11px] text-slate-500 mt-0.5">
+          COGS buckets (Managed, Re-occurring, Non-recurring, VOIP) allocated proportionally by customer hours.
+          Sales &amp; Admin are excluded — they are not customer-specific.
+        </div>
+      </div>
+      <table className="w-full text-sm">
+        <thead className="bg-white text-slate-600">
+          <tr>
+            <th className="px-3 py-2 text-left font-medium">Customer</th>
+            <th className="px-3 py-2 text-right font-medium">Hours</th>
+            <th className="px-3 py-2 text-right font-medium">%</th>
+            {COGS_BUCKETS.map((b) => (
+              <th key={b} className="px-3 py-2 text-right font-medium">
+                {BUCKET_LABELS[b]}
+              </th>
+            ))}
+            <th className="px-3 py-2 text-right font-medium">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.name} className="border-t border-slate-100 hover:bg-slate-50">
+              <td className="px-3 py-1.5 font-medium text-slate-900">{r.name}</td>
+              <td className="px-3 py-1.5 text-right tabular-nums text-slate-600">{r.hours.toFixed(1)}</td>
+              <td className="px-3 py-1.5 text-right tabular-nums text-slate-500">{(r.weight * 100).toFixed(1)}%</td>
+              {COGS_BUCKETS.map((b) => (
+                <td key={b} className={`px-3 py-1.5 text-right tabular-nums ${r.byBucket[b] ? "text-slate-900" : "text-slate-300"}`}>
+                  {r.byBucket[b] ? `$${r.byBucket[b].toFixed(2)}` : "—"}
+                </td>
+              ))}
+              <td className="px-3 py-1.5 text-right tabular-nums font-semibold text-slate-900">
+                ${r.total.toFixed(2)}
+              </td>
+            </tr>
+          ))}
+          <tr className="border-t-2 border-slate-700 bg-slate-50 font-semibold">
+            <td className="px-3 py-2">Total</td>
+            <td className="px-3 py-2 text-right tabular-nums">{rows.reduce((s, r) => s + r.hours, 0).toFixed(1)}</td>
+            <td className="px-3 py-2 text-right tabular-nums">100.0%</td>
+            {COGS_BUCKETS.map((b) => (
+              <td key={b} className="px-3 py-2 text-right tabular-nums">
+                ${(Math.round(rows.reduce((s, r) => s + r.byBucket[b], 0) * 100) / 100).toFixed(2)}
+              </td>
+            ))}
+            <td className="px-3 py-2 text-right tabular-nums">${grandTotal.toFixed(2)}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+export function customerBreakdownToCsv(
+  je: JournalEntry,
+  companies: Array<{ name: string; hours: number }>
+): string {
+  const rows = computeCustomerAllocations(je, companies);
+  const grandTotal = Math.round(rows.reduce((s, r) => s + r.total, 0) * 100) / 100;
+  const esc = (s: string) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
+
+  const lines: string[] = [];
+  lines.push("Per-Customer Payroll Cost Allocation");
+  lines.push("Customer,Hours,%," + COGS_BUCKETS.map((b) => BUCKET_LABELS[b]).join(",") + ",Total");
+  for (const r of rows) {
+    lines.push([
+      esc(r.name),
+      r.hours.toFixed(1),
+      (r.weight * 100).toFixed(1) + "%",
+      ...COGS_BUCKETS.map((b) => r.byBucket[b].toFixed(2)),
+      r.total.toFixed(2),
+    ].join(","));
+  }
+  lines.push([
+    "Total",
+    rows.reduce((s, r) => s + r.hours, 0).toFixed(1),
+    "100.0%",
+    ...COGS_BUCKETS.map((b) =>
+      (Math.round(rows.reduce((s, r) => s + r.byBucket[b], 0) * 100) / 100).toFixed(2)
+    ),
+    grandTotal.toFixed(2),
+  ].join(","));
+  return lines.join("\n");
 }

@@ -101,6 +101,15 @@ export type PayrollMemberRow = {
   entryCount: number;
 };
 
+/** Hours a single member logged to a single company, broken out by bucket.
+ *  Only COGS buckets (managed/recurring/nonRecurring/voip) are populated —
+ *  Sales/Admin time is not customer-specific. */
+export type MemberCompanyHours = {
+  memberId: number;
+  companyName: string;
+  hoursByBucket: Record<PayrollBucket, number>;
+};
+
 export type PayrollResult = {
   period: PayPeriod;
   members: PayrollMemberRow[];
@@ -109,6 +118,10 @@ export type PayrollResult = {
   companies: Array<{ name: string; hours: number }>;
   /** Companies that were actually excluded by this run (echoed back for UX). */
   excludedCompanies: string[];
+  /** Per-member, per-company, per-bucket hours (post-exclusion, COGS only).
+   *  Used by the per-customer JE breakdown to allocate each engineer's pay
+   *  cost to individual clients based on actual time logged. */
+  memberCompanyHours: MemberCompanyHours[];
 };
 
 // ---------------------------------------------------------------------------
@@ -267,6 +280,8 @@ export async function computePayroll(
     entryCount: number;
   };
   const byMember = new Map<number, MemberAcc>();
+  // Key: `${memberId}||${companyName}` → hours by bucket (COGS only)
+  const memberCompanyMap = new Map<string, MemberCompanyHours>();
 
   for (const e of entries) {
     const memberId = e.member?.id;
@@ -291,6 +306,18 @@ export async function computePayroll(
 
     const bucket = classifyEntry(e);
     if (bucket) acc.hoursByBucket[bucket] += hrs;
+
+    // Track per-member, per-company, per-bucket hours for COGS buckets only.
+    const companyName = (e.company?.name ?? "").trim();
+    if (companyName && bucket && bucket !== "sales" && bucket !== "admin") {
+      const key = `${memberId}||${companyName}`;
+      let mc = memberCompanyMap.get(key);
+      if (!mc) {
+        mc = { memberId, companyName, hoursByBucket: emptyBuckets() };
+        memberCompanyMap.set(key, mc);
+      }
+      mc.hoursByBucket[bucket] += hrs;
+    }
   }
 
   const members: PayrollMemberRow[] = [];
@@ -314,5 +341,11 @@ export async function computePayroll(
     members,
     companies,
     excludedCompanies: [...excludedSet].sort(),
+    memberCompanyHours: [...memberCompanyMap.values()].map((mc) => ({
+      ...mc,
+      hoursByBucket: Object.fromEntries(
+        BUCKET_ORDER.map((b) => [b, round2(mc.hoursByBucket[b])])
+      ) as Record<PayrollBucket, number>,
+    })),
   };
 }

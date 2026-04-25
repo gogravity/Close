@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import type { Dept, Bucket } from "./types";
 import {
   parseGustoCsv,
   matchEmployees,
   buildPayrollJe,
+  splitEmployeeByBucket,
   jeToCsv,
+  BUCKET_ACCOUNTS,
   BUCKET_LABELS as JE_BUCKET_LABELS,
   BUCKET_ORDER as JE_BUCKET_ORDER,
   type GustoEmployee,
@@ -14,6 +16,7 @@ import {
   type JournalEntry,
   type PctByBucket,
 } from "./gustoJe";
+import type { MemberCompanyHours } from "@/lib/payroll";
 
 const DEPT_LABELS: Record<Dept, string> = {
   professional: "Professional Services",
@@ -52,6 +55,15 @@ type MemberRow = {
   entryCount: number;
 };
 
+/** One DR line in the per-customer JE breakdown. */
+type CustomerJeLine = {
+  companyName: string;
+  account: string;
+  accountName: string;
+  bucket: Bucket;
+  debit: number;
+};
+
 type OkResponse = {
   ok: true;
   period: {
@@ -66,6 +78,7 @@ type OkResponse = {
   members: MemberRow[];
   companies: Array<{ name: string; hours: number }>;
   excludedCompanies: string[];
+  memberCompanyHours: MemberCompanyHours[];
 };
 
 type ErrResponse = { ok: false; error: string; status?: number; body?: unknown };
@@ -105,6 +118,7 @@ export default function PayrollClient({ defaultYear, defaultMonth, defaultHalf }
   const [gustoFileName, setGustoFileName] = useState<string>("");
   const [gustoParseError, setGustoParseError] = useState<string | null>(null);
   const [je, setJe] = useState<JournalEntry | null>(null);
+  const [customerJeLines, setCustomerJeLines] = useState<CustomerJeLine[]>([]);
   const [includeCustomerBreakdown, setIncludeCustomerBreakdown] = useState(false);
   // When true for a member, their payroll bypasses the percentage split and
   // the entire paycheck goes to their selected dept's bucket. Used for
@@ -213,8 +227,11 @@ export default function PayrollClient({ defaultYear, defaultMonth, defaultHalf }
     // their paycheck to their selected dept's bucket.
     const pctByMemberId: Record<number, PctByBucket> = {};
     const deptByMemberId: Record<number, Dept> = {};
+    // Also capture total bucket hours per member for customer allocation.
+    const memberBucketHours: Record<number, Record<Bucket, number>> = {};
     for (const em of enrichedMembers) {
       deptByMemberId[em.memberId] = em.dept;
+      memberBucketHours[em.memberId] = em.hours;
       if (!excludedFromSplit[em.memberId]) {
         pctByMemberId[em.memberId] = em.pct;
       }
@@ -227,6 +244,19 @@ export default function PayrollClient({ defaultYear, defaultMonth, defaultHalf }
       gustoTotals
     );
     setJe(built);
+
+    // Compute per-customer JE lines using actual engineer time distribution.
+    if (result?.memberCompanyHours?.length) {
+      const lines = buildCustomerJeLines(
+        gustoMatches,
+        pctByMemberId,
+        deptByMemberId,
+        unmatchedDepts,
+        result.memberCompanyHours,
+        memberBucketHours
+      );
+      setCustomerJeLines(lines);
+    }
   }
 
   function toggleExcludeFromSplit(memberId: number) {
@@ -237,8 +267,8 @@ export default function PayrollClient({ defaultYear, defaultMonth, defaultHalf }
     if (!je) return;
     const label = result ? result.period.label : gustoFileName || "payroll";
     let csv = jeToCsv(je, label);
-    if (includeCustomerBreakdown && result?.companies.length) {
-      csv += "\n\n" + customerBreakdownToCsv(je, result.companies);
+    if (includeCustomerBreakdown && customerJeLines.length) {
+      csv += "\n\n" + customerJeLinesToCsv(customerJeLines, je);
     }
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -590,6 +620,7 @@ export default function PayrollClient({ defaultYear, defaultMonth, defaultHalf }
             includeCustomerBreakdown={includeCustomerBreakdown}
             onToggleCustomerBreakdown={() => setIncludeCustomerBreakdown((p) => !p)}
             companies={result?.companies ?? []}
+            customerJeLines={customerJeLines}
           />
         </>
       )}
@@ -614,6 +645,7 @@ function GustoJeSection({
   includeCustomerBreakdown,
   onToggleCustomerBreakdown,
   companies,
+  customerJeLines,
 }: {
   fileInputRef: React.RefObject<HTMLInputElement | null>;
   gustoEmps: GustoEmployee[] | null;
@@ -631,6 +663,7 @@ function GustoJeSection({
   includeCustomerBreakdown: boolean;
   onToggleCustomerBreakdown: () => void;
   companies: Array<{ name: string; hours: number }>;
+  customerJeLines: CustomerJeLine[];
 }) {
   const matchedCount = gustoMatches.filter((m) => m.cwMember).length;
   const unmatched = gustoMatches.filter((m) => !m.cwMember);
@@ -860,8 +893,8 @@ function GustoJeSection({
           </div>
         </div>
 
-        {includeCustomerBreakdown && companies.length > 0 && (
-          <CustomerBreakdownTable je={je} companies={companies} />
+        {includeCustomerBreakdown && customerJeLines.length > 0 && (
+          <CustomerBreakdownTable lines={customerJeLines} je={je} />
         )}
         </>
       )}
@@ -874,140 +907,204 @@ function GustoJeSection({
 // COGS buckets only — Sales/Admin are overhead, not customer-allocable.
 const COGS_BUCKETS: Bucket[] = ["managed", "recurring", "nonRecurring", "voip"];
 
-type CustomerAllocation = {
-  name: string;
-  hours: number;
-  weight: number;
-  byBucket: Record<Bucket, number>;
-  total: number;
-};
+/**
+ * Build per-customer JE DR lines.
+ *
+ * For each (customer, bucket):
+ *   For each engineer:
+ *     share = engineer's hours for customer in bucket ÷ engineer's total hours in bucket
+ *     cost  = engineer's JE cost in bucket (gross wages + ER taxes + benefits) × share
+ *
+ * One output line per (customer, GL account) — wages and taxes post to
+ * different accounts within the same bucket so they remain separate.
+ */
+function buildCustomerJeLines(
+  matches: EmployeeMatch[],
+  pctByMemberId: Record<number, PctByBucket>,
+  deptByMemberId: Record<number, Dept>,
+  unmatchedDepts: Record<string, Dept>,
+  memberCompanyHours: MemberCompanyHours[],
+  memberBucketHours: Record<number, Record<Bucket, number>>
+): CustomerJeLine[] {
+  // Build lookup: memberId → companyName → hoursByBucket
+  const mcLookup = new Map<number, Map<string, Record<Bucket, number>>>();
+  for (const mc of memberCompanyHours) {
+    let byCompany = mcLookup.get(mc.memberId);
+    if (!byCompany) { byCompany = new Map(); mcLookup.set(mc.memberId, byCompany); }
+    byCompany.set(mc.companyName, mc.hoursByBucket as Record<Bucket, number>);
+  }
 
-function computeCustomerAllocations(
-  je: JournalEntry,
-  companies: Array<{ name: string; hours: number }>
-): CustomerAllocation[] {
-  const totalHours = companies.reduce((s, c) => s + c.hours, 0);
-  if (totalHours === 0) return [];
+  // Accumulate: `${companyName}||${account}||${bucket}` → { accountName, debit }
+  const acc = new Map<string, { companyName: string; account: string; accountName: string; bucket: Bucket; debit: number }>();
 
-  const bucketTotals: Record<Bucket, number> = {
-    managed: 0, recurring: 0, nonRecurring: 0, voip: 0, sales: 0, admin: 0,
+  const add = (company: string, acct: string, acctName: string, bucket: Bucket, amount: number) => {
+    if (Math.abs(amount) < 0.005) return;
+    const key = `${company}||${acct}||${bucket}`;
+    const cur = acc.get(key);
+    if (cur) { cur.debit += amount; }
+    else { acc.set(key, { companyName: company, account: acct, accountName: acctName, bucket, debit: amount }); }
   };
-  for (const row of je.bucketRows) {
-    for (const b of COGS_BUCKETS) {
-      bucketTotals[b] += row.byBucket[b] ?? 0;
+
+  for (const m of matches) {
+    const memberId = m.cwMember?.memberId;
+    const pct = memberId != null ? pctByMemberId[memberId] ?? null : null;
+    const dept = memberId != null
+      ? deptByMemberId[memberId] ?? "admin"
+      : unmatchedDepts[m.gusto.gustoName] ?? "admin";
+
+    const split = splitEmployeeByBucket(m.gusto, pct, dept);
+    const totalHours = memberId != null ? memberBucketHours[memberId] : null;
+    const byCompany  = memberId != null ? mcLookup.get(memberId) : null;
+    if (!totalHours || !byCompany) continue;
+
+    for (const [company, coHours] of byCompany.entries()) {
+      for (const b of COGS_BUCKETS) {
+        const totalBucketHrs = totalHours[b] ?? 0;
+        if (totalBucketHrs === 0) continue;
+        const coHrs = (coHours[b] as number | undefined) ?? 0;
+        if (coHrs === 0) continue;
+
+        const share = coHrs / totalBucketHrs;
+        const wagesAcct = BUCKET_ACCOUNTS[b].grossWages;
+        const wagesName = BUCKET_ACCOUNTS[b].name;
+        const taxAcct   = BUCKET_ACCOUNTS[b].payrollTaxes;
+
+        add(company, wagesAcct, `${wagesName} — Gross Wages`, b, split.grossByBucket[b] * share);
+        add(company, taxAcct,   `${wagesName} — Payroll Taxes`, b, split.erTaxByBucket[b] * share);
+        // Benefits post to fixed accounts but are still customer-allocated
+        add(company, "600080",  `${wagesName} — Medical/Life (employer)`, b,
+          (split.medicalErByBucket[b] + split.principalLifeErByBucket[b]) * share);
+        add(company, "600090",  `${wagesName} — 401(k) Match (employer)`, b,
+          split.trad401kErByBucket[b] * share);
+      }
     }
   }
 
-  return companies
-    .filter((c) => c.hours > 0)
-    .sort((a, b) => b.hours - a.hours)
-    .map((c) => {
-      const weight = c.hours / totalHours;
-      const byBucket: Record<Bucket, number> = { managed: 0, recurring: 0, nonRecurring: 0, voip: 0, sales: 0, admin: 0 };
-      let total = 0;
-      for (const b of COGS_BUCKETS) {
-        const amt = Math.round(bucketTotals[b] * weight * 100) / 100;
-        byBucket[b] = amt;
-        total += amt;
-      }
-      return { name: c.name, hours: c.hours, weight, byBucket, total: Math.round(total * 100) / 100 };
-    });
+  // Round and sort: by customer name, then account, then bucket
+  return [...acc.values()]
+    .map((r) => ({ ...r, debit: Math.round(r.debit * 100) / 100 }))
+    .filter((r) => r.debit >= 0.01)
+    .sort((a, b) =>
+      a.companyName.localeCompare(b.companyName) ||
+      a.account.localeCompare(b.account)
+    );
 }
 
 function CustomerBreakdownTable({
+  lines,
   je,
-  companies,
 }: {
+  lines: CustomerJeLine[];
   je: JournalEntry;
-  companies: Array<{ name: string; hours: number }>;
 }) {
-  const rows = computeCustomerAllocations(je, companies);
-  const grandTotal = Math.round(rows.reduce((s, r) => s + r.total, 0) * 100) / 100;
+  const [expanded, setExpanded] = React.useState<Set<string>>(new Set());
+  const toggle = (name: string) => setExpanded((p) => { const n = new Set(p); n.has(name) ? n.delete(name) : n.add(name); return n; });
+
+  // Group by customer
+  const byCustomer = new Map<string, CustomerJeLine[]>();
+  for (const l of lines) {
+    let arr = byCustomer.get(l.companyName);
+    if (!arr) { arr = []; byCustomer.set(l.companyName, arr); }
+    arr.push(l);
+  }
+  const customers = [...byCustomer.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  const grandTotal = Math.round(lines.reduce((s, l) => s + l.debit, 0) * 100) / 100;
+
+  // Credit rows from the base JE — unchanged, company-wide
+  const credits = je.summaryRows.filter((r) => r.credit > 0);
 
   return (
     <div className="rounded border border-slate-200 bg-white overflow-x-auto">
       <div className="border-b border-slate-200 bg-slate-50 px-4 py-2">
-        <div className="text-sm font-semibold text-slate-700">Per-Customer Cost Allocation</div>
+        <div className="text-sm font-semibold text-slate-700">Per-Customer JE Lines</div>
         <div className="text-[11px] text-slate-500 mt-0.5">
-          COGS buckets (Managed, Re-occurring, Non-recurring, VOIP) allocated proportionally by customer hours.
-          Sales &amp; Admin are excluded — they are not customer-specific.
+          One DR line per account per customer. Cost = each engineer&apos;s bucket cost ×
+          (their hours for that customer in that bucket ÷ their total hours in that bucket).
+          Credits (payroll liabilities) are company-wide and shown below.
         </div>
       </div>
+
+      {/* Debits — per customer */}
       <table className="w-full text-sm">
-        <thead className="bg-white text-slate-600">
+        <thead className="bg-slate-50 text-slate-600">
           <tr>
+            <th className="w-6 px-2 py-2" />
             <th className="px-3 py-2 text-left font-medium">Customer</th>
-            <th className="px-3 py-2 text-right font-medium">Hours</th>
-            <th className="px-3 py-2 text-right font-medium">%</th>
-            {COGS_BUCKETS.map((b) => (
-              <th key={b} className="px-3 py-2 text-right font-medium">
-                {BUCKET_LABELS[b]}
-              </th>
-            ))}
-            <th className="px-3 py-2 text-right font-medium">Total</th>
+            <th className="px-3 py-2 text-right font-medium">Total DR</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((r) => (
-            <tr key={r.name} className="border-t border-slate-100 hover:bg-slate-50">
-              <td className="px-3 py-1.5 font-medium text-slate-900">{r.name}</td>
-              <td className="px-3 py-1.5 text-right tabular-nums text-slate-600">{r.hours.toFixed(1)}</td>
-              <td className="px-3 py-1.5 text-right tabular-nums text-slate-500">{(r.weight * 100).toFixed(1)}%</td>
-              {COGS_BUCKETS.map((b) => (
-                <td key={b} className={`px-3 py-1.5 text-right tabular-nums ${r.byBucket[b] ? "text-slate-900" : "text-slate-300"}`}>
-                  {r.byBucket[b] ? `$${r.byBucket[b].toFixed(2)}` : "—"}
-                </td>
-              ))}
-              <td className="px-3 py-1.5 text-right tabular-nums font-semibold text-slate-900">
-                ${r.total.toFixed(2)}
-              </td>
-            </tr>
-          ))}
+          {customers.map(([name, cLines]) => {
+            const total = Math.round(cLines.reduce((s, l) => s + l.debit, 0) * 100) / 100;
+            const isOpen = expanded.has(name);
+            return (
+              <React.Fragment key={name}>
+                <tr
+                  className="border-t border-slate-100 cursor-pointer hover:bg-slate-50"
+                  onClick={() => toggle(name)}
+                >
+                  <td className="px-2 py-1.5 text-center text-[10px] text-slate-400">{isOpen ? "▾" : "▸"}</td>
+                  <td className="px-3 py-1.5 font-medium text-slate-900">{name}</td>
+                  <td className="px-3 py-1.5 text-right tabular-nums font-semibold text-slate-900">${total.toFixed(2)}</td>
+                </tr>
+                {isOpen && cLines.map((l, i) => (
+                  <tr key={i} className="border-t border-slate-50 bg-slate-50/60">
+                    <td />
+                    <td className="px-3 py-1 text-xs text-slate-600">
+                      <span className="font-mono text-slate-500 mr-2">{l.account}</span>
+                      {l.accountName}
+                    </td>
+                    <td className="px-3 py-1 text-right tabular-nums text-xs text-slate-700">${l.debit.toFixed(2)}</td>
+                  </tr>
+                ))}
+              </React.Fragment>
+            );
+          })}
           <tr className="border-t-2 border-slate-700 bg-slate-50 font-semibold">
-            <td className="px-3 py-2">Total</td>
-            <td className="px-3 py-2 text-right tabular-nums">{rows.reduce((s, r) => s + r.hours, 0).toFixed(1)}</td>
-            <td className="px-3 py-2 text-right tabular-nums">100.0%</td>
-            {COGS_BUCKETS.map((b) => (
-              <td key={b} className="px-3 py-2 text-right tabular-nums">
-                ${(Math.round(rows.reduce((s, r) => s + r.byBucket[b], 0) * 100) / 100).toFixed(2)}
-              </td>
-            ))}
+            <td />
+            <td className="px-3 py-2">Total debits</td>
             <td className="px-3 py-2 text-right tabular-nums">${grandTotal.toFixed(2)}</td>
           </tr>
         </tbody>
       </table>
+
+      {/* Credits — unchanged from base JE */}
+      <div className="border-t border-slate-200">
+        <div className="border-b border-slate-100 bg-slate-50 px-4 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+          Credits (company-wide payroll liabilities — unchanged)
+        </div>
+        <table className="w-full text-sm">
+          <tbody>
+            {credits.map((r, i) => (
+              <tr key={i} className="border-t border-slate-100">
+                <td className="w-6 px-2" />
+                <td className="px-3 py-1 font-mono text-xs text-slate-500">{r.account}</td>
+                <td className="px-3 py-1 text-slate-700">{r.accountName}</td>
+                <td className="px-3 py-1 text-xs text-slate-500">{r.lineItem}</td>
+                <td className="px-3 py-1 text-right tabular-nums text-slate-700">${r.credit.toFixed(2)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
 
-export function customerBreakdownToCsv(
-  je: JournalEntry,
-  companies: Array<{ name: string; hours: number }>
-): string {
-  const rows = computeCustomerAllocations(je, companies);
-  const grandTotal = Math.round(rows.reduce((s, r) => s + r.total, 0) * 100) / 100;
+function customerJeLinesToCsv(lines: CustomerJeLine[], je: JournalEntry): string {
   const esc = (s: string) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
-
-  const lines: string[] = [];
-  lines.push("Per-Customer Payroll Cost Allocation");
-  lines.push("Customer,Hours,%," + COGS_BUCKETS.map((b) => BUCKET_LABELS[b]).join(",") + ",Total");
-  for (const r of rows) {
-    lines.push([
-      esc(r.name),
-      r.hours.toFixed(1),
-      (r.weight * 100).toFixed(1) + "%",
-      ...COGS_BUCKETS.map((b) => r.byBucket[b].toFixed(2)),
-      r.total.toFixed(2),
-    ].join(","));
+  const rows: string[] = [];
+  rows.push("Per-Customer Payroll Journal Entry");
+  rows.push("Account,Account Name,Customer,Debit,Credit");
+  for (const l of lines) {
+    rows.push([l.account, esc(l.accountName), esc(l.companyName), l.debit.toFixed(2), ""].join(","));
   }
-  lines.push([
-    "Total",
-    rows.reduce((s, r) => s + r.hours, 0).toFixed(1),
-    "100.0%",
-    ...COGS_BUCKETS.map((b) =>
-      (Math.round(rows.reduce((s, r) => s + r.byBucket[b], 0) * 100) / 100).toFixed(2)
-    ),
-    grandTotal.toFixed(2),
-  ].join(","));
-  return lines.join("\n");
+  // Credits — company-wide
+  for (const r of je.summaryRows.filter((r) => r.credit > 0)) {
+    rows.push([r.account, esc(r.accountName), "", "", r.credit.toFixed(2)].join(","));
+  }
+  const debitTotal  = Math.round(lines.reduce((s, l) => s + l.debit, 0) * 100) / 100;
+  const creditTotal = Math.round(je.summaryRows.reduce((s, r) => s + r.credit, 0) * 100) / 100;
+  rows.push(["", "Totals", "", debitTotal.toFixed(2), creditTotal.toFixed(2)].join(","));
+  return rows.join("\n");
 }

@@ -6,6 +6,8 @@ export type IntegrationField = {
   type: FieldType;
   placeholder?: string;
   help?: string;
+  /** Override the Key Vault secret name for this field. Otherwise: `{vaultPrefix||id}-{kebab(key)}`. */
+  vaultSecretName?: string;
 };
 
 export type IntegrationCategory = "gl" | "psa" | "payroll" | "spend" | "ai" | "crm" | "distributor" | "security";
@@ -17,7 +19,18 @@ export type Integration = {
   blurb: string;
   docsUrl?: string;
   fields: IntegrationField[];
+  /** Prefix used for auto-deriving Key Vault secret names. Defaults to `id`. */
+  vaultPrefix?: string;
 };
+
+function kebab(s: string): string {
+  return s.replace(/([a-z0-9])([A-Z])/g, "$1-$2").replace(/_/g, "-").toLowerCase();
+}
+
+export function resolveVaultSecretName(integ: Integration, field: IntegrationField): string {
+  if (field.vaultSecretName) return field.vaultSecretName;
+  return `${integ.vaultPrefix ?? integ.id}-${kebab(field.key)}`;
+}
 
 export const integrations: Integration[] = [
   {
@@ -27,10 +40,11 @@ export const integrations: Integration[] = [
     blurb:
       "General ledger. Pulls trial balance, AR/AP subledgers, and posts adjusting journal entries.",
     docsUrl: "https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/api-reference/v2.0/",
+    vaultPrefix: "bc",
     fields: [
       { key: "tenantId", label: "Tenant ID (Azure AD)", type: "text", placeholder: "00000000-0000-0000-0000-000000000000" },
-      { key: "environmentName", label: "Environment Name", type: "text", placeholder: "Production" },
-      { key: "companyName", label: "Company Name", type: "text", placeholder: "CRONUS USA, Inc." },
+      { key: "environmentName", label: "Environment Name", type: "text", placeholder: "Production", vaultSecretName: "bc-environment" },
+      { key: "companyName", label: "Company Name", type: "text", placeholder: "CRONUS USA, Inc.", vaultSecretName: "bc-company-id" },
       { key: "clientId", label: "Client ID", type: "secret" },
       { key: "clientSecret", label: "Client Secret", type: "secret" },
     ],
@@ -42,8 +56,9 @@ export const integrations: Integration[] = [
     blurb:
       "Time entries, tickets, agreements. Feeds unbilled time revenue and deferred revenue (block hours).",
     docsUrl: "https://developer.connectwise.com/Products/Manage",
+    vaultPrefix: "cw",
     fields: [
-      { key: "siteUrl", label: "Site URL", type: "text", placeholder: "na.myconnectwise.net" },
+      { key: "siteUrl", label: "Site URL", type: "text", placeholder: "na.myconnectwise.net", vaultSecretName: "cw-url" },
       { key: "companyId", label: "Company ID", type: "text" },
       { key: "publicKey", label: "Public Key", type: "secret" },
       { key: "privateKey", label: "Private Key", type: "secret" },

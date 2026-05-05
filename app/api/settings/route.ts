@@ -10,7 +10,11 @@ export async function GET() {
 
 export async function POST(request: Request) {
   const body = await request.json();
-  await updateSettings(body);
+  try {
+    await updateSettings(body);
+  } catch (err) {
+    return NextResponse.json({ error: (err as Error).message }, { status: 409 });
+  }
   const snapshot = await getSettingsSnapshot();
   return NextResponse.json(snapshot);
 }

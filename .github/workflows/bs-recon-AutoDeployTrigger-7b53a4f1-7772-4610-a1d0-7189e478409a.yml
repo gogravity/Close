@@ -41,6 +41,17 @@ jobs:
         with:
           azcliversion: latest
           inlineScript: |
+            # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            # DO NOT ADD --set-env-vars HERE.
+            #
+            # All credentials are stored in Azure Key Vault and all environment
+            # variables (AZURE_KEY_VAULT_NAME, etc.) are configured directly on
+            # the Container App in Azure. Adding --set-env-vars to this command
+            # overwrites those settings on every deploy and breaks KV auth.
+            #
+            # To change env vars or secrets: Azure Portal → bs-recon → Settings.
+            # To add a new credential: put it in Key Vault, update integrations.ts.
+            # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
             az containerapp update \
               --name bs-recon \
               --resource-group bs-recon-rg \

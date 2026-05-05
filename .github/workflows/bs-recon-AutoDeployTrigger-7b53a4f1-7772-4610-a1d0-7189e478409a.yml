@@ -46,5 +46,4 @@ jobs:
               --resource-group bs-recon-rg \
               --image bsreconacr.azurecr.io/bs-recon:${{ github.sha }} \
               --set-env-vars \
-                "PAX8_CLIENT_ID=${{ secrets.PAX8_CLIENT_ID }}" \
-                "PAX8_CLIENT_SECRET=${{ secrets.PAX8_CLIENT_SECRET }}"
+                "AZURE_KEY_VAULT_NAME=${{ secrets.BSRECON_KEY_VAULT_NAME }}"

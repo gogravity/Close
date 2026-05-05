@@ -13,17 +13,42 @@ import SalesTaxClient, { type TaxTransactionRow } from "./SalesTaxClient";
 
 export const dynamic = "force-dynamic";
 
-function periodStartOf(periodEnd: string): string {
-  const d = new Date(periodEnd);
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-01`;
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
 }
 
-export default async function SalesTaxPage() {
+function lastDayOfMonth(year: number, month1: number): number {
+  // month1 is 1-12. Day 0 of next month gives last day of current month.
+  return new Date(Date.UTC(year, month1, 0)).getUTCDate();
+}
+
+/** Resolve `?month=YYYY-MM` (or fall back to entity periodEnd) into start/end. */
+function resolvePeriod(monthParam: string | undefined, periodEnd: string): { start: string; end: string } {
+  if (monthParam && /^\d{4}-\d{2}$/.test(monthParam)) {
+    const [y, m] = monthParam.split("-").map(Number);
+    return {
+      start: `${y}-${pad2(m)}-01`,
+      end:   `${y}-${pad2(m)}-${pad2(lastDayOfMonth(y, m))}`,
+    };
+  }
+  // Default: month containing periodEnd, ending at periodEnd
+  const d = new Date(periodEnd);
+  return {
+    start: `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-01`,
+    end: periodEnd,
+  };
+}
+
+export default async function SalesTaxPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ month?: string }>;
+}) {
   const entity = await getEntityConfig();
   if (!entity.bcConfigured) redirect("/onboarding");
 
-  const periodEnd = entity.periodEnd;
-  const periodStart = periodStartOf(periodEnd);
+  const sp = (await searchParams) ?? {};
+  const { start: periodStart, end: periodEnd } = resolvePeriod(sp.month, entity.periodEnd);
 
   try {
     const [invoices, creditMemos, customers, taxAreas, taxGroups] = await Promise.all([
@@ -120,6 +145,7 @@ export default async function SalesTaxPage() {
         <SalesTaxClient
           periodStart={periodStart}
           periodEnd={periodEnd}
+          selectedMonth={periodStart.slice(0, 7)}
           rows={rows}
           taxAreas={taxAreas.map((a) => ({
             code: a.code,

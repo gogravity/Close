@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { fmt } from "@/lib/recon";
 
 export type TaxTransactionRow = {
@@ -30,10 +31,25 @@ type GroupKey = "state" | "taxCode" | "customer";
 type Props = {
   periodStart: string;
   periodEnd: string;
+  /** Currently selected month, formatted as YYYY-MM. Drives the month selector. */
+  selectedMonth: string;
   rows: TaxTransactionRow[];
   taxAreas: TaxAreaRef[];
   taxGroups: TaxGroupRef[];
 };
+
+/** Build month options going back N months from the current month. */
+function buildMonthOptions(monthsBack = 18): Array<{ value: string; label: string }> {
+  const now = new Date();
+  const opts: Array<{ value: string; label: string }> = [];
+  for (let i = 0; i < monthsBack; i++) {
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+    const value = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+    const label = d.toLocaleString("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
+    opts.push({ value, label });
+  }
+  return opts;
+}
 
 function pctFmt(n: number) {
   return `${n.toFixed(2)}%`;
@@ -42,10 +58,21 @@ function pctFmt(n: number) {
 export default function SalesTaxClient({
   periodStart,
   periodEnd,
+  selectedMonth,
   rows,
   taxAreas,
   taxGroups,
 }: Props) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const monthOptions = useMemo(() => buildMonthOptions(18), []);
+
+  function changeMonth(month: string) {
+    const params = new URLSearchParams(searchParams?.toString() ?? "");
+    params.set("month", month);
+    router.push(`?${params.toString()}`);
+  }
+
   const [groupBy, setGroupBy] = useState<GroupKey>("state");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [excludeVoip, setExcludeVoip] = useState(false);
@@ -139,25 +166,39 @@ export default function SalesTaxClient({
         />
       </div>
 
-      {/* Filter + export */}
+      {/* Month selector + filter + export */}
       <div className="flex items-center justify-between gap-4 flex-wrap">
-        <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer select-none">
-          <input
-            type="checkbox"
-            checked={excludeVoip}
-            onChange={(e) => {
-              setExcludeVoip(e.target.checked);
-              setExpanded(null);
-            }}
-            className="h-4 w-4 rounded border-slate-300 text-slate-800 focus:ring-slate-400"
-          />
-          <span>
-            Exclude VoIP
-            <span className="ml-2 text-xs text-slate-500">
-              (DG invoices{voipExcludedTax !== 0 ? ` · ${fmt(voipExcludedTax)} in tax` : ""})
+        <div className="flex items-center gap-4 flex-wrap">
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <span className="text-xs uppercase tracking-wide text-slate-500">Month:</span>
+            <select
+              value={selectedMonth}
+              onChange={(e) => changeMonth(e.target.value)}
+              className="rounded border border-slate-300 bg-white px-2 py-1 text-sm text-slate-800 focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+            >
+              {monthOptions.map((m) => (
+                <option key={m.value} value={m.value}>{m.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={excludeVoip}
+              onChange={(e) => {
+                setExcludeVoip(e.target.checked);
+                setExpanded(null);
+              }}
+              className="h-4 w-4 rounded border-slate-300 text-slate-800 focus:ring-slate-400"
+            />
+            <span>
+              Exclude VoIP
+              <span className="ml-2 text-xs text-slate-500">
+                (DG invoices{voipExcludedTax !== 0 ? ` · ${fmt(voipExcludedTax)} in tax` : ""})
+              </span>
             </span>
-          </span>
-        </label>
+          </label>
+        </div>
         <button
           onClick={() =>
             downloadCsv(filteredRows, groups, groupBy, periodStart, periodEnd, excludeVoip)
@@ -248,6 +289,7 @@ export default function SalesTaxClient({
                           rows={g.rows}
                           subExpanded={subExpanded}
                           toggleSub={toggleSub}
+                          showStateLevel={groupBy === "state"}
                         />
                       </td>
                     </tr>
@@ -388,18 +430,96 @@ function InvoiceLines({ rows }: { rows: TaxTransactionRow[] }) {
   );
 }
 
+function buildJurisdBuckets(rows: TaxTransactionRow[]) {
+  type JurisdBucket = {
+    key: string;
+    rate: number;
+    jurisdiction: string;
+    taxable: number;
+    tax: number;
+    rows: TaxTransactionRow[];
+  };
+  const m = new Map<string, JurisdBucket>();
+  for (const r of rows) {
+    const rate = Number((r.taxPercent ?? 0).toFixed(3));
+    const jurisdiction = r.taxAreaDisplayName || r.state || "—";
+    const k = `${rate}|${jurisdiction}`;
+    let jb = m.get(k);
+    if (!jb) {
+      jb = { key: k, rate, jurisdiction, taxable: 0, tax: 0, rows: [] };
+      m.set(k, jb);
+    }
+    jb.taxable += r.taxableAmount;
+    jb.tax += r.taxAmount;
+    jb.rows.push(r);
+  }
+  return Array.from(m.values()).sort((a, b) => Math.abs(b.tax) - Math.abs(a.tax));
+}
+
 function JurisdictionBreakdown({
   parentKey,
   rows,
   subExpanded,
   toggleSub,
+  showStateLevel,
 }: {
   parentKey: string;
   rows: TaxTransactionRow[];
   subExpanded: Record<string, boolean>;
   toggleSub: (k: string) => void;
+  /** Whether to nest jurisdictions under a State level. Off in Tax Code /
+   *  Customer modes where the state nesting is redundant or noisy. */
+  showStateLevel: boolean;
 }) {
-  // Level 1: group by state
+  // Flat mode: skip the State level, show rate+jurisdiction directly
+  if (!showStateLevel) {
+    const jBuckets = buildJurisdBuckets(rows);
+    return (
+      <table className="w-full text-xs">
+        <thead className="text-slate-500">
+          <tr>
+            <th className="px-2 py-1 text-left font-medium w-[24px]"></th>
+            <th className="px-2 py-1 text-left font-medium w-[80px]">Rate</th>
+            <th className="px-2 py-1 text-left font-medium">Jurisdiction</th>
+            <th className="px-2 py-1 text-right font-medium">Taxable</th>
+            <th className="px-2 py-1 text-right font-medium">Tax</th>
+            <th className="px-2 py-1 text-right font-medium">Lines</th>
+          </tr>
+        </thead>
+        <tbody>
+          {jBuckets.map((jb) => {
+            const jKey  = `${parentKey}|flat|${jb.key}`;
+            const jOpen = subExpanded[jKey] ?? false;
+            return (
+              <>
+                <tr
+                  key={jKey}
+                  className="border-t border-slate-200 cursor-pointer hover:bg-white"
+                  onClick={() => toggleSub(jKey)}
+                >
+                  <td className="px-2 py-1 text-center text-slate-400">{jOpen ? "▾" : "▸"}</td>
+                  <td className="px-2 py-1 tabular-nums text-slate-700">{jb.rate.toFixed(2)}%</td>
+                  <td className="px-2 py-1 text-slate-700">{jb.jurisdiction}</td>
+                  <td className="px-2 py-1 text-right tabular-nums">{fmt(jb.taxable)}</td>
+                  <td className="px-2 py-1 text-right tabular-nums font-medium">{fmt(jb.tax)}</td>
+                  <td className="px-2 py-1 text-right tabular-nums text-slate-500">{jb.rows.length}</td>
+                </tr>
+                {jOpen && (
+                  <tr key={`${jKey}-lines`} className="bg-white">
+                    <td colSpan={6} className="px-2 py-2 pl-8">
+                      <InvoiceLines rows={jb.rows} />
+                    </td>
+                  </tr>
+                )}
+              </>
+            );
+          })}
+        </tbody>
+      </table>
+    );
+  }
+
+  // Nested mode: State → Rate+Jurisdiction → Lines (current behavior)
   type StateBucket = {
     state: string;
     taxable: number;
@@ -540,29 +660,59 @@ function downloadCsv(
   excludeVoip: boolean
 ): void {
   const lines: string[] = [];
+  const groupLabel = groupBy === "state" ? "State" : groupBy === "taxCode" ? "Tax Code" : "Customer";
 
   lines.push(`Sales Tax Report,${periodStart} to ${periodEnd}`);
+  lines.push(`Grouped by,${groupLabel}`);
   if (excludeVoip) lines.push("VoIP invoices (DG-prefixed) excluded,");
   lines.push("");
 
-  // Summary section
-  const summaryLabel =
-    groupBy === "state" ? "State" : groupBy === "taxCode" ? "Tax Code" : "Customer";
-  lines.push(`Summary by ${summaryLabel}`);
-  lines.push(["Group", "Taxable Sales", "Tax Collected", "Lines"].join(","));
+  // Live-view section: mirror exactly what's on screen
+  lines.push(`Breakdown by ${groupLabel}`);
+  lines.push([groupLabel, "State", "Rate", "Jurisdiction", "Taxable Sales", "Tax Collected", "Lines"].join(","));
+
   let sumTaxable = 0;
   let sumTax = 0;
   for (const g of groups) {
-    lines.push(
-      [csvEscape(g.label), g.taxable.toFixed(2), g.tax.toFixed(2), g.rows.length].join(",")
-    );
+    // Group total row
+    lines.push([csvEscape(g.label), "", "", "", g.taxable.toFixed(2), g.tax.toFixed(2), g.rows.length].join(","));
     sumTaxable += g.taxable;
     sumTax += g.tax;
+
+    if (groupBy === "state") {
+      // Single state per group → flat jurisdiction list
+      const jBuckets = buildJurisdBuckets(g.rows);
+      for (const jb of jBuckets) {
+        lines.push([
+          "",
+          "",
+          jb.rate.toFixed(2) + "%",
+          csvEscape(jb.jurisdiction),
+          jb.taxable.toFixed(2),
+          jb.tax.toFixed(2),
+          jb.rows.length,
+        ].join(","));
+      }
+    } else {
+      // Tax Code / Customer → flat jurisdiction list (matches the live UI)
+      const jBuckets = buildJurisdBuckets(g.rows);
+      for (const jb of jBuckets) {
+        lines.push([
+          "",
+          "",
+          jb.rate.toFixed(2) + "%",
+          csvEscape(jb.jurisdiction),
+          jb.taxable.toFixed(2),
+          jb.tax.toFixed(2),
+          jb.rows.length,
+        ].join(","));
+      }
+    }
   }
-  lines.push(["Total", sumTaxable.toFixed(2), sumTax.toFixed(2), rows.length].join(","));
+  lines.push(["Total", "", "", "", sumTaxable.toFixed(2), sumTax.toFixed(2), rows.length].join(","));
   lines.push("");
 
-  // Detail section
+  // Detail section: every line item
   lines.push("Detail");
   lines.push(
     [

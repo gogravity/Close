@@ -8,6 +8,7 @@ type Props = { initial: SettingsSnapshot };
 
 export default function SettingsForm({ initial }: Props) {
   const [snapshot, setSnapshot] = useState(initial);
+  const kvLocked = initial.keyVaultEnabled;
   const [entityName, setEntityName] = useState(initial.entityName);
   const [periodEnd, setPeriodEnd] = useState(initial.periodEnd);
   const [integFields, setIntegFields] = useState<Record<string, Record<string, string>>>({});
@@ -24,10 +25,19 @@ export default function SettingsForm({ initial }: Props) {
   async function save() {
     setSaving(true);
     setMessage(null);
+    // Strip empty-string values before sending — a blank field means "leave
+    // as-is", not "delete". Prevents autofill-then-clear from wiping credentials.
+    const cleanedIntegFields: Record<string, Record<string, string>> = {};
+    for (const [integId, fields] of Object.entries(integFields)) {
+      const nonEmpty = Object.fromEntries(
+        Object.entries(fields).filter(([, v]) => v.trim() !== "")
+      );
+      if (Object.keys(nonEmpty).length > 0) cleanedIntegFields[integId] = nonEmpty;
+    }
     const body = {
       entityName,
       periodEnd,
-      integrations: integFields,
+      integrations: kvLocked ? undefined : cleanedIntegFields,
     };
     try {
       const res = await fetch("/api/settings", {
@@ -57,6 +67,13 @@ export default function SettingsForm({ initial }: Props) {
 
   return (
     <div className="space-y-8">
+      {kvLocked && (
+        <div className="rounded border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+          <strong className="font-semibold">Azure Key Vault managed.</strong> Integration credentials
+          are sourced from Key Vault at runtime and read-only here. Update secrets via Azure
+          (portal, CLI, or Bicep); they refresh within ~5 minutes.
+        </div>
+      )}
       <section className="rounded border border-slate-200 bg-white">
         <header className="border-b border-slate-200 px-5 py-3">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
@@ -120,8 +137,11 @@ export default function SettingsForm({ initial }: Props) {
                           value={pending}
                           onChange={(e) => setField(i.id, f.key, e.target.value)}
                           placeholder={placeholder}
-                          autoComplete="off"
-                          className="mt-1 block w-full rounded border border-slate-300 px-3 py-2 text-sm font-mono"
+                          autoComplete={f.type === "secret" ? "new-password" : "off"}
+                          disabled={kvLocked}
+                          readOnly={kvLocked}
+                          title={kvLocked ? "Managed by Azure Key Vault" : undefined}
+                          className="mt-1 block w-full rounded border border-slate-300 px-3 py-2 text-sm font-mono disabled:bg-slate-50 disabled:text-slate-500 disabled:cursor-not-allowed"
                         />
                         {f.help && (
                           <span className="mt-1 block text-[11px] text-slate-500">{f.help}</span>

@@ -2,7 +2,8 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import "server-only";
 import { decrypt, encrypt, maskSecret } from "./crypto";
-import { integrations, type Integration } from "./integrations";
+import { integrations, resolveVaultSecretName, type Integration } from "./integrations";
+import { getVaultSecret, isKeyVaultEnabled } from "./keyVault";
 
 const SETTINGS_FILE = path.join(process.cwd(), ".data", "settings.json");
 
@@ -61,25 +62,34 @@ export type SettingsSnapshot = {
   entityName: string;
   periodEnd: string;
   integrations: IntegrationStatus[];
+  keyVaultEnabled: boolean;
 };
 
 export async function getSettingsSnapshot(): Promise<SettingsSnapshot> {
   const data = await readRaw();
+  const kvEnabled = isKeyVaultEnabled();
   const snapshot: SettingsSnapshot = {
     entityName: data.entityName ?? "",
     periodEnd: data.periodEnd ?? "",
     integrations: [],
+    keyVaultEnabled: kvEnabled,
   };
   for (const integ of integrations) {
     const stored = data.integrations[integ.id] ?? {};
     const fields: FieldStatus[] = [];
-    let anySet = false;
+    let allSet = integ.fields.length > 0;
     for (const f of integ.fields) {
       const entry = stored[f.key];
-      const isSet = Boolean(entry?.value);
-      anySet = anySet || isSet;
+      let isSet = Boolean(entry?.value);
       let displayValue = "";
-      if (isSet && entry) {
+      if (kvEnabled) {
+        const kvVal = await getVaultSecret(resolveVaultSecretName(integ, f));
+        if (kvVal) {
+          isSet = true;
+          displayValue = f.type === "secret" ? maskSecret(kvVal) : kvVal;
+        }
+      }
+      if (!displayValue && entry?.value) {
         if (f.type === "secret") {
           try {
             const plain = entry.encrypted ? await decrypt(entry.value) : entry.value;
@@ -91,6 +101,7 @@ export async function getSettingsSnapshot(): Promise<SettingsSnapshot> {
           displayValue = entry.encrypted ? await decrypt(entry.value) : entry.value;
         }
       }
+      if (!isSet) allSet = false;
       fields.push({ ...f, isSet, displayValue });
     }
     snapshot.integrations.push({
@@ -100,7 +111,7 @@ export async function getSettingsSnapshot(): Promise<SettingsSnapshot> {
       blurb: integ.blurb,
       docsUrl: integ.docsUrl,
       fields,
-      configured: integ.fields.length > 0 && integ.fields.every((f) => Boolean(stored[f.key]?.value)),
+      configured: allSet,
     });
   }
   return snapshot;
@@ -116,16 +127,22 @@ export async function updateSettings(req: UpdateRequest): Promise<void> {
   const data = await readRaw();
   if (req.entityName !== undefined) data.entityName = req.entityName;
   if (req.periodEnd !== undefined) data.periodEnd = req.periodEnd;
-  if (req.integrations) {
+  if (req.integrations && Object.keys(req.integrations).length > 0) {
+    if (isKeyVaultEnabled()) {
+      throw new Error("Integration credentials are managed by Azure Key Vault and cannot be edited from the UI.");
+    }
     for (const [integId, fields] of Object.entries(req.integrations)) {
       const integ = integrations.find((i) => i.id === integId);
       if (!integ) continue;
       const existing = data.integrations[integId] ?? {};
       for (const f of integ.fields) {
         if (!(f.key in fields)) continue;
-        const val = fields[f.key] ?? "";
+        const val = (fields[f.key] ?? "").trim();
         if (val === "") {
-          delete existing[f.key];
+          // Empty string means "leave as-is" — the client strips blanks before
+          // sending, so receiving one here means something slipped through.
+          // Never silently delete an existing credential.
+          continue;
         } else if (f.type === "secret") {
           existing[f.key] = { value: await encrypt(val), encrypted: true };
         } else {
@@ -141,12 +158,27 @@ export async function updateSettings(req: UpdateRequest): Promise<void> {
 export async function getIntegrationSecrets(
   integId: string
 ): Promise<Record<string, string>> {
-  const data = await readRaw();
   const integ = integrations.find((i) => i.id === integId);
-  const stored = data.integrations[integId] ?? {};
   const out: Record<string, string> = {};
   if (!integ) return out;
+
+  const kvEnabled = isKeyVaultEnabled();
+  if (kvEnabled) {
+    const results = await Promise.all(
+      integ.fields.map(async (f) => {
+        const v = await getVaultSecret(resolveVaultSecretName(integ, f));
+        return [f.key, v] as const;
+      })
+    );
+    for (const [k, v] of results) {
+      if (v) out[k] = v;
+    }
+  }
+
+  const data = await readRaw();
+  const stored = data.integrations[integId] ?? {};
   for (const f of integ.fields) {
+    if (out[f.key]) continue;
     const entry = stored[f.key];
     if (!entry?.value) continue;
     out[f.key] = entry.encrypted ? await decrypt(entry.value) : entry.value;
@@ -161,22 +193,18 @@ export async function getEntityConfig(): Promise<{
   cwConfigured: boolean;
 }> {
   const data = await readRaw();
-  const bc = data.integrations["business-central"] ?? {};
-  const cw = data.integrations["connectwise"] ?? {};
-  const bcCompanyEntry = bc["companyName"];
-  const bcCompany = bcCompanyEntry?.value
-    ? bcCompanyEntry.encrypted
-      ? await decrypt(bcCompanyEntry.value)
-      : bcCompanyEntry.value
-    : "";
+  const [bc, cw] = await Promise.all([
+    getIntegrationSecrets("business-central"),
+    getIntegrationSecrets("connectwise"),
+  ]);
   const bcConfigured = ["tenantId", "environmentName", "companyName", "clientId", "clientSecret"].every(
-    (k) => Boolean(bc[k]?.value)
+    (k) => Boolean(bc[k])
   );
   const cwConfigured = ["siteUrl", "companyId", "publicKey", "privateKey", "clientId"].every((k) =>
-    Boolean(cw[k]?.value)
+    Boolean(cw[k])
   );
   return {
-    name: bcCompany,
+    name: bc.companyName ?? "",
     periodEnd: data.periodEnd ?? new Date().toISOString().slice(0, 10),
     bcConfigured,
     cwConfigured,

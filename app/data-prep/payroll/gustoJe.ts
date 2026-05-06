@@ -127,6 +127,12 @@ export function parseGustoCsv(text: string): {
   if (headerIdx < 0) return { employees: [], totals: null };
   const headers = rows[headerIdx].map((h) => (h ?? "").trim());
   const col = (name: string): number => headers.findIndex((h) => h === name);
+  /** Find every column whose header matches the predicate. Used for imputed-
+   *  income columns since Gusto names them inconsistently across earning types
+   *  (e.g. "Principal Life (Imputed Income)", "Group Term Life Imputed", etc). */
+  const colsMatching = (predicate: (h: string) => boolean): number[] =>
+    headers.map((h, i) => (predicate(h) ? i : -1)).filter((i) => i >= 0);
+  const imputedColIdxs = colsMatching((h) => /imputed/i.test(h));
 
   const cols = {
     last: col("Last Name"),
@@ -215,7 +221,7 @@ export function parseGustoCsv(text: string): {
       hsaEmployee: num(r[cols.hsaEmp]),
       hsaEmployer: num(r[cols.hsaEr]),
       trad401kLoan: num(r[cols.trad401kLoan]),
-      imputedPay: num(r[cols.imputed]),
+      imputedPay: imputedColIdxs.reduce((s, i) => s + num(r[i]), 0),
       cellPhoneReimbursement: num(r[cols.cellPhone]),
       netPay: num(r[cols.netPay]),
     };

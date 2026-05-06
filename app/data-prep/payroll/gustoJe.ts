@@ -567,10 +567,26 @@ export function buildPayrollJe(
     pushDr(`Employer payroll taxes — ${name}`, amount, acct, name);
   }
 
-  // Fixed-account benefit DRs (employer portion only). Rest is credited.
+  // Fixed-account benefit DRs (employer portion only). Each CR below for a
+  // benefit total (ee + er) needs its employer half DR'd here; the employee
+  // half is implicit in the gross-wages DR (gross is pre-deduction). Without
+  // these the JE goes out of balance by the sum of employer contributions
+  // for any benefit that's only on the CR side.
   pushDr(
     "Medical Insurance (employer)",
     grand.medicalInsuranceEmployer,
+    "600080",
+    "Health Insurance & Benefits"
+  );
+  pushDr(
+    "Dental Insurance (employer)",
+    grand.dentalInsuranceEmployer,
+    "600080",
+    "Health Insurance & Benefits"
+  );
+  pushDr(
+    "Vision (employer)",
+    grand.visionEmployer,
     "600080",
     "Health Insurance & Benefits"
   );
@@ -581,10 +597,48 @@ export function buildPayrollJe(
     "Health Insurance & Benefits"
   );
   pushDr(
+    "Voluntary Life (employer)",
+    grand.voluntaryLifeEmployer,
+    "600080",
+    "Health Insurance & Benefits"
+  );
+  pushDr(
+    "Aflac Pre (employer)",
+    grand.aflacPreEmployer,
+    "600080",
+    "Health Insurance & Benefits"
+  );
+  pushDr(
+    "Aflac After (employer)",
+    grand.aflacAfterEmployer,
+    "600080",
+    "Health Insurance & Benefits"
+  );
+  pushDr(
+    "Health Savings Account (employer)",
+    grand.hsaEmployer,
+    "600080",
+    "Health Insurance & Benefits"
+  );
+  pushDr(
     "Guideline Traditional 401(k) (employer)",
     grand.trad401kEmployer,
     "600090",
     "401k Match"
+  );
+  pushDr(
+    "Guideline Roth 401(k) (employer)",
+    grand.roth401kEmployer,
+    "600090",
+    "401k Match"
+  );
+  // Cell phone reimbursement is paid via the paycheck (rolled into Net Pay)
+  // but isn't part of gross wages — needs its own DR so the JE balances.
+  pushDr(
+    "Cell Phone Reimbursement",
+    grand.cellPhoneReimbursement,
+    "600100",
+    "Cell Phone Reimbursement"
   );
 
   // Credits — payroll liabilities

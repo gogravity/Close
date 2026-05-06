@@ -96,6 +96,7 @@ export type GustoEmployee = {
   hsaEmployee: number;
   hsaEmployer: number;
   trad401kLoan: number;
+  imputedPay: number;
   cellPhoneReimbursement: number;
   netPay: number;
 };
@@ -166,6 +167,7 @@ export function parseGustoCsv(text: string): {
     hsaEmp: col("Health Savings Account (Employee Deduction)"),
     hsaEr: col("Health Savings Account (Company Contribution)"),
     trad401kLoan: col("Guideline 401(k) Loan (Employee Deduction)"),
+    imputed: col("Imputed Pay"),
     cellPhone: col("Cell phone"),
     netPay: col("Net Pay"),
   };
@@ -213,6 +215,7 @@ export function parseGustoCsv(text: string): {
       hsaEmployee: num(r[cols.hsaEmp]),
       hsaEmployer: num(r[cols.hsaEr]),
       trad401kLoan: num(r[cols.trad401kLoan]),
+      imputedPay: num(r[cols.imputed]),
       cellPhoneReimbursement: num(r[cols.cellPhone]),
       netPay: num(r[cols.netPay]),
     };
@@ -385,12 +388,12 @@ export function splitEmployeeByBucket(
   trad401kErByBucket: Record<Bucket, number>;
   cellPhoneByBucket: Record<Bucket, number>;
 } {
-  // Cash wages only — exclude imputed income (Principal Life imputed col)
-  // from the DR basis. Imputed is phantom taxable income with no cash
-  // movement; Sheet1 template uses Regular + Time Off for the wage DR and
-  // ignores imputed. Including it would inflate DRs with no offsetting CR
-  // and throw the JE out of balance.
-  const cashWages = emp.regularAmount + emp.timeOffAmount;
+  // Cash wages = ALL taxable earnings types (regular, OT, time off, holiday,
+  // bonus, commission, etc.) MINUS imputed income. Using grossEarnings as
+  // the source picks up every earnings column Gusto reports without us
+  // having to enumerate them. Imputed is phantom taxable income with no
+  // cash movement and no offsetting CR — must be excluded.
+  const cashWages = emp.grossEarnings - emp.imputedPay;
   const w = weightsFor(pct, defaultDept);
   return {
     grossByBucket: splitAmount(cashWages, w),

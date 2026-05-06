@@ -95,6 +95,7 @@ export type GustoEmployee = {
   voluntaryLifeEmployer: number;
   hsaEmployee: number;
   hsaEmployer: number;
+  trad401kLoan: number;
   cellPhoneReimbursement: number;
   netPay: number;
 };
@@ -164,6 +165,7 @@ export function parseGustoCsv(text: string): {
     volLifeEr: col("Voluntary Life (Company Contribution)"),
     hsaEmp: col("Health Savings Account (Employee Deduction)"),
     hsaEr: col("Health Savings Account (Company Contribution)"),
+    trad401kLoan: col("Guideline 401(k) Loan (Employee Deduction)"),
     cellPhone: col("Cell phone"),
     netPay: col("Net Pay"),
   };
@@ -210,6 +212,7 @@ export function parseGustoCsv(text: string): {
       voluntaryLifeEmployer: num(r[cols.volLifeEr]),
       hsaEmployee: num(r[cols.hsaEmp]),
       hsaEmployer: num(r[cols.hsaEr]),
+      trad401kLoan: num(r[cols.trad401kLoan]),
       cellPhoneReimbursement: num(r[cols.cellPhone]),
       netPay: num(r[cols.netPay]),
     };
@@ -371,6 +374,12 @@ export function splitEmployeeByBucket(
 ): {
   grossByBucket: Record<Bucket, number>;
   erTaxByBucket: Record<Bucket, number>;
+  /** Per-tax-type employer tax allocations — used to post separate DR lines
+   *  for Medicare / SS / FUTA / SUTA, matching BC's posting style. */
+  socialSecurityErByBucket: Record<Bucket, number>;
+  medicareErByBucket: Record<Bucket, number>;
+  futaByBucket: Record<Bucket, number>;
+  sutaByBucket: Record<Bucket, number>;
   medicalErByBucket: Record<Bucket, number>;
   principalLifeErByBucket: Record<Bucket, number>;
   trad401kErByBucket: Record<Bucket, number>;
@@ -385,6 +394,10 @@ export function splitEmployeeByBucket(
   return {
     grossByBucket: splitAmount(cashWages, w),
     erTaxByBucket: splitAmount(emp.employerTaxes, w),
+    socialSecurityErByBucket: splitAmount(emp.socialSecurityEmployer, w),
+    medicareErByBucket: splitAmount(emp.medicareEmployer, w),
+    futaByBucket: splitAmount(emp.futa, w),
+    sutaByBucket: splitAmount(emp.suta, w),
     medicalErByBucket: splitAmount(emp.medicalInsuranceEmployer, w),
     principalLifeErByBucket: splitAmount(emp.principalLifeEmployer, w),
     trad401kErByBucket: splitAmount(emp.trad401kEmployer, w),
@@ -438,6 +451,10 @@ export function buildPayrollJe(
 ): JournalEntry {
   const totalGrossByBucket = zeroBuckets();
   const totalErTaxByBucket = zeroBuckets();
+  const totalSsErByBucket  = zeroBuckets();
+  const totalMedErByBucket = zeroBuckets();
+  const totalFutaByBucket  = zeroBuckets();
+  const totalSutaByBucket  = zeroBuckets();
   const totalMedicalErByBucket = zeroBuckets();
   const totalPrincipalLifeErByBucket = zeroBuckets();
   const totalTrad401kErByBucket = zeroBuckets();
@@ -454,6 +471,10 @@ export function buildPayrollJe(
     for (const b of BUCKET_ORDER) {
       totalGrossByBucket[b] += split.grossByBucket[b];
       totalErTaxByBucket[b] += split.erTaxByBucket[b];
+      totalSsErByBucket[b]  += split.socialSecurityErByBucket[b];
+      totalMedErByBucket[b] += split.medicareErByBucket[b];
+      totalFutaByBucket[b]  += split.futaByBucket[b];
+      totalSutaByBucket[b]  += split.sutaByBucket[b];
       totalMedicalErByBucket[b] += split.medicalErByBucket[b];
       totalPrincipalLifeErByBucket[b] += split.principalLifeErByBucket[b];
       totalTrad401kErByBucket[b] += split.trad401kErByBucket[b];
@@ -551,20 +572,31 @@ export function buildPayrollJe(
   for (const [acct, { amount, name }] of drByAcct.entries()) {
     pushDr(`Gross wages — ${name}`, amount, acct, name);
   }
-  drByAcct.clear();
-  for (const b of BUCKET_ORDER) {
-    const acct = payrollTaxAcctMap[b];
-    const amount = totalErTaxByBucket[b];
-    if (Math.abs(amount) < 0.005) continue;
-    const cur = drByAcct.get(acct) ?? {
-      amount: 0,
-      name: b === "sales" || b === "admin" ? "Payroll Taxes (SG&A)" : "Payroll Taxes (COGS)",
-    };
-    cur.amount += amount;
-    drByAcct.set(acct, cur);
-  }
-  for (const [acct, { amount, name }] of drByAcct.entries()) {
-    pushDr(`Employer payroll taxes — ${name}`, amount, acct, name);
+  // Granular employer tax DRs — break out Medicare, SS, FUTA, SUTA per BC's
+  // posting style. Each tax type aggregated by destination account (COGS
+  // 500040 vs SG&A 600040) since it's split across cost centers via bucket %.
+  const taxRows: Array<{ label: string; perBucket: Record<Bucket, number> }> = [
+    { label: "Employer Medicare tax",         perBucket: totalMedErByBucket },
+    { label: "Employer Social Security tax",  perBucket: totalSsErByBucket },
+    { label: "Employer FUTA tax",             perBucket: totalFutaByBucket },
+    { label: "Employer SUTA tax",             perBucket: totalSutaByBucket },
+  ];
+  for (const { label, perBucket } of taxRows) {
+    const byAcct = new Map<string, { amount: number; name: string }>();
+    for (const b of BUCKET_ORDER) {
+      const acct = payrollTaxAcctMap[b];
+      const amount = perBucket[b];
+      if (Math.abs(amount) < 0.005) continue;
+      const cur = byAcct.get(acct) ?? {
+        amount: 0,
+        name: b === "sales" || b === "admin" ? "Payroll Taxes (SG&A)" : "Payroll Taxes (COGS)",
+      };
+      cur.amount += amount;
+      byAcct.set(acct, cur);
+    }
+    for (const [acct, { amount, name }] of byAcct.entries()) {
+      pushDr(label, amount, acct, name);
+    }
   }
 
   // Fixed-account benefit DRs (employer portion only). Each CR below for a
@@ -643,9 +675,16 @@ export function buildPayrollJe(
 
   // Credits — payroll liabilities
   pushCr("Net pay", grand.netPay, "202010", "Accrued Wages");
+  // Tax CR split into employer + employee halves to match BC's posting style
   pushCr(
-    "Employer + employee taxes",
-    grand.employerTaxes + grand.employeeTaxes,
+    "Total employer taxes",
+    grand.employerTaxes,
+    "202040",
+    "Accrued Payroll Tax"
+  );
+  pushCr(
+    "Total employee taxes",
+    grand.employeeTaxes,
     "202040",
     "Accrued Payroll Tax"
   );
@@ -658,6 +697,12 @@ export function buildPayrollJe(
   pushCr(
     "Guideline Roth 401(k) (total)",
     grand.roth401kEmployee + grand.roth401kEmployer,
+    "202050",
+    "Accrued 401k Match"
+  );
+  pushCr(
+    "Guideline 401(k) Loan (total)",
+    grand.trad401kLoan,
     "202050",
     "Accrued 401k Match"
   );

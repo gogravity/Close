@@ -383,6 +383,7 @@ export function splitEmployeeByBucket(
   medicalErByBucket: Record<Bucket, number>;
   principalLifeErByBucket: Record<Bucket, number>;
   trad401kErByBucket: Record<Bucket, number>;
+  cellPhoneByBucket: Record<Bucket, number>;
 } {
   // Cash wages only — exclude imputed income (Principal Life imputed col)
   // from the DR basis. Imputed is phantom taxable income with no cash
@@ -401,6 +402,7 @@ export function splitEmployeeByBucket(
     medicalErByBucket: splitAmount(emp.medicalInsuranceEmployer, w),
     principalLifeErByBucket: splitAmount(emp.principalLifeEmployer, w),
     trad401kErByBucket: splitAmount(emp.trad401kEmployer, w),
+    cellPhoneByBucket: splitAmount(emp.cellPhoneReimbursement, w),
   };
 }
 
@@ -458,6 +460,7 @@ export function buildPayrollJe(
   const totalMedicalErByBucket = zeroBuckets();
   const totalPrincipalLifeErByBucket = zeroBuckets();
   const totalTrad401kErByBucket = zeroBuckets();
+  const totalCellPhoneByBucket = zeroBuckets();
 
   for (const m of matches) {
     const memberId = m.cwMember?.memberId;
@@ -478,6 +481,7 @@ export function buildPayrollJe(
       totalMedicalErByBucket[b] += split.medicalErByBucket[b];
       totalPrincipalLifeErByBucket[b] += split.principalLifeErByBucket[b];
       totalTrad401kErByBucket[b] += split.trad401kErByBucket[b];
+      totalCellPhoneByBucket[b] += split.cellPhoneByBucket[b];
     }
   }
 
@@ -666,12 +670,28 @@ export function buildPayrollJe(
   );
   // Cell phone reimbursement is paid via the paycheck (rolled into Net Pay)
   // but isn't part of gross wages — needs its own DR so the JE balances.
-  pushDr(
-    "Cell Phone Reimbursement",
-    grand.cellPhoneReimbursement,
-    "600100",
-    "Cell Phone Reimbursement"
-  );
+  // BC historical pattern: split COGS vs SG&A by bucket %, posted to the
+  // same accounts as payroll taxes/benefits (500040 for COGS, 600080 for
+  // SG&A). Description "Reimbursements" matches the historical PAY NOV
+  // entries we found in the GL search.
+  {
+    const byAcct = new Map<string, { amount: number; name: string }>();
+    for (const b of BUCKET_ORDER) {
+      const amount = totalCellPhoneByBucket[b];
+      if (Math.abs(amount) < 0.005) continue;
+      // COGS buckets → 500040 ; SG&A buckets → 600080
+      const acct = b === "sales" || b === "admin" ? "600080" : "500040";
+      const name = b === "sales" || b === "admin"
+        ? "Health Insurance & Benefits"
+        : "Payroll Taxes (COGS)";
+      const cur = byAcct.get(acct) ?? { amount: 0, name };
+      cur.amount += amount;
+      byAcct.set(acct, cur);
+    }
+    for (const [acct, { amount, name }] of byAcct.entries()) {
+      pushDr("Reimbursements", amount, acct, name);
+    }
+  }
 
   // Credits — payroll liabilities
   pushCr("Net pay", grand.netPay, "202010", "Accrued Wages");

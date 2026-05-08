@@ -89,8 +89,9 @@ export type PayrollMemberRow = {
   memberId: number;
   identifier: string; // CW username
   name: string;
-  /** Pre-override default. Currently always "professional" — user flips
-   *  via the dropdown. */
+  /** Pre-override default. Set to "managed" — most CW members in the
+   *  team are Managed Services engineers. User flips via the dropdown
+   *  for Sales / Admin / Professional Services people. */
   defaultDept: PayrollDept;
   totalTrackedHours: number;
   /** Raw classified hours, before the Sales/Admin remainder logic is applied.
@@ -328,7 +329,7 @@ export async function computePayroll(
       memberId: acc.memberId,
       identifier: acc.identifier,
       name: acc.name,
-      defaultDept: "professional",
+      defaultDept: "managed",
       totalTrackedHours: round2(acc.totalHours),
       rawHoursByBucket: raw,
       entryCount: acc.entryCount,

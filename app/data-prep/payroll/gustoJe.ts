@@ -133,6 +133,21 @@ export function parseGustoCsv(text: string): {
   const colsMatching = (predicate: (h: string) => boolean): number[] =>
     headers.map((h, i) => (predicate(h) ? i : -1)).filter((i) => i >= 0);
   const imputedColIdxs = colsMatching((h) => /imputed/i.test(h));
+  // SUTA columns are state-specific (e.g. "TN Unemployment Insurance
+  // Premiums (Employer)", "UT Unemployment Insurance (Employer)") — match
+  // any column referencing employer-side unemployment.
+  const sutaColIdxs = colsMatching(
+    (h) => /unemployment.*employer|sui.*employer/i.test(h)
+  );
+  // Time-off / PTO earnings columns. Gusto often splits PTO into separate
+  // earning types — match any (Amount) column for vacation, sick, holiday,
+  // PTO, personal, or bereavement so they all route to 202060 Accrued PTO.
+  const timeOffAmountColIdxs = colsMatching((h) =>
+    /\b(time off|vacation|sick|holiday|pto|paid time off|personal|bereavement|jury)\b.*\(amount\)/i.test(h)
+  );
+  const timeOffHoursColIdxs = colsMatching((h) =>
+    /\b(time off|vacation|sick|holiday|pto|paid time off|personal|bereavement|jury)\b.*\(hours\)/i.test(h)
+  );
 
   const cols = {
     last: col("Last Name"),
@@ -187,8 +202,17 @@ export function parseGustoCsv(text: string): {
       gustoName: `${lastName}, ${firstName}`,
       regularHours: num(r[cols.regHours]),
       regularAmount: num(r[cols.regAmount]),
-      timeOffHours: num(r[cols.timeOffHours]),
-      timeOffAmount: num(r[cols.timeOffAmount]),
+      // Prefer the explicit "Time Off (Amount)" aggregate column if present —
+      // Gusto's CSV usually has both an aggregate AND per-type columns
+      // (Vacation, Sick, Holiday, etc.) for the same dollars; summing them
+      // all double-counts. Only fall back to summing per-type columns when
+      // there's no aggregate.
+      timeOffHours: cols.timeOffHours >= 0
+        ? num(r[cols.timeOffHours])
+        : timeOffHoursColIdxs.reduce((s, i) => s + num(r[i]), 0),
+      timeOffAmount: cols.timeOffAmount >= 0
+        ? num(r[cols.timeOffAmount])
+        : timeOffAmountColIdxs.reduce((s, i) => s + num(r[i]), 0),
       grossEarnings: num(r[cols.gross]),
       employeeTaxes: num(r[cols.empTaxes]),
       employerTaxes: num(r[cols.erTaxes]),
@@ -199,7 +223,7 @@ export function parseGustoCsv(text: string): {
       socialSecurityEmployer: num(r[cols.ssEr]),
       medicareEmployer: num(r[cols.medEr]),
       futa: num(r[cols.futa]),
-      suta: num(r[cols.suta]),
+      suta: sutaColIdxs.reduce((s, i) => s + num(r[i]), 0),
       medicalInsuranceEmployer: num(r[cols.medicalEr]),
       medicalInsuranceEmployee: num(r[cols.medicalEmp]),
       dentalInsuranceEmployee: num(r[cols.dentalEmp]),
@@ -233,7 +257,15 @@ export function parseGustoCsv(text: string): {
     const r = rows[i];
     const last = (r[cols.last] ?? "").trim();
     if (!last) continue;
-    if (last.toLowerCase() === "totals") {
+    // Gusto labels the totals row inconsistently across reports — could be
+    // "Totals", "Payroll Totals", "Total", "Grand Totals", etc. Treat any
+    // first-cell value containing "total" (with no first name in cell 2)
+    // as the totals row, never as an employee. Misclassifying it doubles
+    // every aggregate because aggregateTotals then sums the 11 real
+    // employees PLUS this row (which is itself the sum of those 11).
+    const first = (r[cols.first] ?? "").trim();
+    const looksLikeTotals = /total/i.test(last) && !first;
+    if (looksLikeTotals) {
       totals = mkRow(r);
       continue;
     }
@@ -393,16 +425,22 @@ export function splitEmployeeByBucket(
   principalLifeErByBucket: Record<Bucket, number>;
   trad401kErByBucket: Record<Bucket, number>;
   cellPhoneByBucket: Record<Bucket, number>;
+  /** Paid Time Off portion of gross wages — split per bucket. PTO routes
+   *  to 202060 Accrued PTO (releasing previously-accrued liability) rather
+   *  than the wage expense accounts. Without this, PTO usage is double-
+   *  counted on the wage line. Pattern matches BC's historical PAY JEs. */
+  timeOffByBucket: Record<Bucket, number>;
 } {
-  // Cash wages = ALL taxable earnings types (regular, OT, time off, holiday,
-  // bonus, commission, etc.) MINUS imputed income. Using grossEarnings as
-  // the source picks up every earnings column Gusto reports without us
-  // having to enumerate them. Imputed is phantom taxable income with no
-  // cash movement and no offsetting CR — must be excluded.
-  const cashWages = emp.grossEarnings - emp.imputedPay;
+  // Wage DR basis = ALL taxable earnings (regular, OT, holiday, bonus,
+  // commission, etc.) MINUS imputed income MINUS time-off amount. PTO is
+  // split out separately because BC routes PTO usage to 202060 Accrued PTO
+  // (releasing the previously-accrued liability) instead of the wage
+  // expense accounts. Imputed is phantom taxable income with no cash
+  // movement and no offsetting CR — must be excluded.
+  const wagesDrBasis = emp.grossEarnings - emp.imputedPay - emp.timeOffAmount;
   const w = weightsFor(pct, defaultDept);
   return {
-    grossByBucket: splitAmount(cashWages, w),
+    grossByBucket: splitAmount(wagesDrBasis, w),
     erTaxByBucket: splitAmount(emp.employerTaxes, w),
     socialSecurityErByBucket: splitAmount(emp.socialSecurityEmployer, w),
     medicareErByBucket: splitAmount(emp.medicareEmployer, w),
@@ -412,6 +450,7 @@ export function splitEmployeeByBucket(
     principalLifeErByBucket: splitAmount(emp.principalLifeEmployer, w),
     trad401kErByBucket: splitAmount(emp.trad401kEmployer, w),
     cellPhoneByBucket: splitAmount(emp.cellPhoneReimbursement, w),
+    timeOffByBucket: splitAmount(emp.timeOffAmount, w),
   };
 }
 
@@ -470,6 +509,7 @@ export function buildPayrollJe(
   const totalPrincipalLifeErByBucket = zeroBuckets();
   const totalTrad401kErByBucket = zeroBuckets();
   const totalCellPhoneByBucket = zeroBuckets();
+  const totalTimeOffByBucket = zeroBuckets();
 
   for (const m of matches) {
     const memberId = m.cwMember?.memberId;
@@ -491,6 +531,7 @@ export function buildPayrollJe(
       totalPrincipalLifeErByBucket[b] += split.principalLifeErByBucket[b];
       totalTrad401kErByBucket[b] += split.trad401kErByBucket[b];
       totalCellPhoneByBucket[b] += split.cellPhoneByBucket[b];
+      totalTimeOffByBucket[b]   += split.timeOffByBucket[b];
     }
   }
 
@@ -702,8 +743,29 @@ export function buildPayrollJe(
     }
   }
 
+  // Paid Time Off — release accrued PTO liability when an employee uses it.
+  // BC historical pattern (PAY NOV 16-30): DR 202060 for the time-off
+  // amount instead of routing it to wage expense. Posts as a single DR
+  // line per the JE we examined; we keep it that way.
+  {
+    const totalPto = sumBuckets(totalTimeOffByBucket);
+    if (Math.abs(totalPto) >= 0.005) {
+      pushDr("Paid Time Off", totalPto, "202060", "Accrued PTO");
+    }
+  }
+
   // Credits — payroll liabilities
+  // Net Pay + Cell Phone Reimbursement both go to 202010 Accrued Wages: BC's
+  // historical "Debit net pay" CR captures everything paid to the employee
+  // (taxable wages + non-taxable reimbursements). Gusto's "Net Pay" column
+  // does NOT include reimbursements, so we add cell phone here separately.
   pushCr("Net pay", grand.netPay, "202010", "Accrued Wages");
+  pushCr(
+    "Cell phone reimbursement (paid)",
+    grand.cellPhoneReimbursement,
+    "202010",
+    "Accrued Wages"
+  );
   // Tax CR split into employer + employee halves to match BC's posting style
   pushCr(
     "Total employer taxes",
@@ -783,6 +845,35 @@ export function buildPayrollJe(
     "202080",
     "Accrued Other Employee Benefits"
   );
+
+  // Rounding plug — every line is independently rounded to 2 decimals so a
+  // sub-cent residual can survive across DR/CR. Detect any residual ≤ $0.05
+  // and apply it as a single adjusting line so DR/CR match exactly.
+  {
+    const drSum = round2(summaryRows.reduce((s, r) => s + r.debit, 0));
+    const crSum = round2(summaryRows.reduce((s, r) => s + r.credit, 0));
+    const residual = round2(drSum - crSum);
+    if (Math.abs(residual) > 0 && Math.abs(residual) <= 0.05) {
+      // CR > DR → add DR plug; DR > CR → add CR plug
+      if (residual < 0) {
+        summaryRows.push({
+          lineItem:    "Rounding adjustment",
+          debit:       round2(-residual),
+          credit:      0,
+          account:     "600010",
+          accountName: "Salary and Wages",
+        });
+      } else {
+        summaryRows.push({
+          lineItem:    "Rounding adjustment",
+          debit:       0,
+          credit:      round2(residual),
+          account:     "202010",
+          accountName: "Accrued Wages",
+        });
+      }
+    }
+  }
 
   const debitTotal = round2(summaryRows.reduce((s, r) => s + r.debit, 0));
   const creditTotal = round2(summaryRows.reduce((s, r) => s + r.credit, 0));

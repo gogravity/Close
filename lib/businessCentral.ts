@@ -92,6 +92,58 @@ export async function bcGet<T>(
   return bcGetWithRetry<T>(pathAndQuery, apiVersion, false);
 }
 
+/** POST a JSON body to a BC API path. Returns the created entity (BC's
+ *  v2.0 endpoints respond with the inserted record). Used to push journal
+ *  lines into BC programmatically — same auth flow as bcGet. */
+export async function bcPost<T>(
+  pathAndQuery: string,
+  body: unknown,
+  apiVersion: "v1.0" | "v2.0" = "v2.0"
+): Promise<T> {
+  return bcMutate<T>("POST", pathAndQuery, body, apiVersion, false);
+}
+
+async function bcMutate<T>(
+  method: "POST" | "PATCH" | "DELETE",
+  pathAndQuery: string,
+  body: unknown,
+  apiVersion: "v1.0" | "v2.0",
+  isRetry: boolean
+): Promise<T> {
+  const creds = await loadCredentials();
+  const cacheKey = `${creds.tenantId}/${creds.clientId}`;
+  if (isRetry) tokenCache.delete(cacheKey);
+  const token = await getAccessToken(creds);
+  const url = `https://api.businesscentral.dynamics.com/v2.0/${encodeURIComponent(
+    creds.tenantId
+  )}/${encodeURIComponent(creds.environmentName)}/api/${apiVersion}${pathAndQuery}`;
+  const res = await fetch(url, {
+    method,
+    headers: {
+      Authorization:  `Bearer ${token}`,
+      Accept:         "application/json",
+      "Content-Type": "application/json",
+    },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+    cache: "no-store",
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    if (res.status === 401 && !isRetry) {
+      return bcMutate<T>(method, pathAndQuery, body, apiVersion, true);
+    }
+    let parsed: unknown = text;
+    try { parsed = JSON.parse(text); } catch { /* keep as text */ }
+    throw new BusinessCentralError(
+      `BC ${res.status} ${res.statusText}`,
+      res.status,
+      parsed
+    );
+  }
+  if (!text) return undefined as unknown as T;
+  return JSON.parse(text) as T;
+}
+
 async function bcGetWithRetry<T>(
   pathAndQuery: string,
   apiVersion: "v1.0" | "v2.0",

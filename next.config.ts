@@ -11,6 +11,13 @@ const nextConfig: NextConfig = {
   // isn't copied into .next. Externalize so they load straight from
   // node_modules at runtime in the server.
   serverExternalPackages: ["pdf-parse", "pdfjs-dist"],
+
+  // The payroll RapidStart generator reads a template binary from disk via
+  // process.cwd(). Standalone output otherwise wouldn't include arbitrary
+  // files outside node_modules — list them explicitly here.
+  outputFileTracingIncludes: {
+    "/api/payroll/rapidstart": ["./lib/rapidStart/payroll_je_template.rapidstart"],
+  },
 };
 
 export default nextConfig;

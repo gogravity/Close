@@ -279,6 +279,88 @@ export default function PayrollClient({ defaultYear, defaultMonth, defaultHalf }
     URL.revokeObjectURL(url);
   }
 
+  /** Build a BC RapidStart Configuration Package (.rapidstart) for the JE.
+   *  Format = gzipped UTF-16-LE XML, generated server-side from the
+   *  GRAVITY PAYROLL Configuration Package template. Imports into BC via
+   *  Configuration Packages → Import Package → Apply Data, which lands the
+   *  lines in Gen. Journal Line ready for review and posting. */
+  async function downloadRapidStart() {
+    if (!je || !result) return;
+    // Document No. matches BC's historical payroll JE pattern e.g.
+    // "PAY MAY 1 - MAY 15" / "PAY NOV 16 - NOV 30". BC's Gen. Journal Line
+    // Document No. is capped at 20 chars — including the year ("...2026")
+    // pushed us to 24 and BC rejected the import. Year is in the Posting
+    // Date field anyway, so dropping it loses no info.
+    const monthLabel = MONTH_LABELS[result.period.month - 1].toUpperCase();
+    const startDay = Number(result.period.startDate.slice(-2));
+    const endDay   = Number(result.period.endDate.slice(-2));
+    const documentNo = `PAY ${monthLabel} ${startDay} - ${monthLabel} ${endDay}`;
+
+    // When "Split hours by customer" is on, replace the aggregated DR rows
+    // with per-customer DR lines (each carrying CW companyName so the
+    // generator stamps the BTG_BASManageClientName extension). Credits stay
+    // company-wide — payroll liabilities aren't customer-specific.
+    let lines: Array<{
+      account: string;
+      accountName: string;
+      lineItem: string;
+      debit: number;
+      credit: number;
+      companyName?: string;
+    }>;
+    if (includeCustomerBreakdown && customerJeLines.length > 0) {
+      const drLines = customerJeLines.map((l) => ({
+        account:     l.account,
+        accountName: l.accountName,
+        // Description must include customer for clarity in the BC posted JE
+        lineItem:    `${l.companyName} — ${l.accountName}`,
+        debit:       l.debit,
+        credit:      0,
+        companyName: l.companyName, // ← exact CW name, drives BTG_BASManageClientName
+      }));
+      const crLines = je.summaryRows
+        .filter((r) => r.credit > 0)
+        .map((r) => ({
+          account:     r.account,
+          accountName: r.accountName,
+          lineItem:    r.lineItem,
+          debit:       0,
+          credit:      r.credit,
+          // no companyName — these are company-wide liability credits
+        }));
+      lines = [...drLines, ...crLines];
+    } else {
+      lines = je.summaryRows.map((r) => ({
+        account:     r.account,
+        accountName: r.accountName,
+        lineItem:    r.lineItem,
+        debit:       r.debit,
+        credit:      r.credit,
+      }));
+    }
+
+    const res = await fetch("/api/payroll/rapidstart", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        summaryRows:  lines,
+        postingDate:  result.period.endDate,
+        documentNo,
+      }),
+    });
+    if (!res.ok) {
+      alert(`RapidStart export failed: ${res.status}`);
+      return;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `payroll-${documentNo.replace(/[^a-zA-Z0-9-_]+/g, "_")}.rapidstart`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   function copyToAccruedPayroll() {
     if (!je || !result) return;
     // Snapshot shape mirrors what section/accrued-payroll/AccruedPayrollClient
@@ -613,6 +695,7 @@ export default function PayrollClient({ defaultYear, defaultMonth, defaultHalf }
             onUpload={handleGustoUpload}
             onGenerate={generateJe}
             onDownload={downloadJeCsv}
+            onDownloadRapidStart={downloadRapidStart}
             onCopyToAccruedPayroll={copyToAccruedPayroll}
             periodLabel={result?.period.label ?? ""}
             unmatchedDepts={unmatchedDepts}
@@ -621,6 +704,7 @@ export default function PayrollClient({ defaultYear, defaultMonth, defaultHalf }
             onToggleCustomerBreakdown={() => setIncludeCustomerBreakdown((p) => !p)}
             companies={result?.companies ?? []}
             customerJeLines={customerJeLines}
+            gustoTotals={gustoTotals}
           />
         </>
       )}
@@ -638,6 +722,7 @@ function GustoJeSection({
   onUpload,
   onGenerate,
   onDownload,
+  onDownloadRapidStart,
   onCopyToAccruedPayroll,
   periodLabel,
   unmatchedDepts,
@@ -646,6 +731,7 @@ function GustoJeSection({
   onToggleCustomerBreakdown,
   companies,
   customerJeLines,
+  gustoTotals,
 }: {
   fileInputRef: React.RefObject<HTMLInputElement | null>;
   gustoEmps: GustoEmployee[] | null;
@@ -656,6 +742,7 @@ function GustoJeSection({
   onUpload: (file: File) => void;
   onGenerate: () => void;
   onDownload: () => void;
+  onDownloadRapidStart: () => void;
   onCopyToAccruedPayroll: () => void;
   periodLabel: string;
   unmatchedDepts: Record<string, Dept>;
@@ -664,6 +751,7 @@ function GustoJeSection({
   onToggleCustomerBreakdown: () => void;
   companies: Array<{ name: string; hours: number }>;
   customerJeLines: CustomerJeLine[];
+  gustoTotals: GustoEmployee | null;
 }) {
   const matchedCount = gustoMatches.filter((m) => m.cwMember).length;
   const unmatched = gustoMatches.filter((m) => !m.cwMember);
@@ -745,6 +833,14 @@ function GustoJeSection({
               className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
             >
               Download CSV
+            </button>
+            <button
+              type="button"
+              onClick={onDownloadRapidStart}
+              className="rounded border border-blue-300 bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-800 hover:bg-blue-100"
+              title="Download a BC Configuration Package (.rapidstart) for import into Configuration Packages → Apply Data"
+            >
+              Download Configuration Package (.rapidstart)
             </button>
           </div>
         )}
@@ -891,6 +987,9 @@ function GustoJeSection({
               <div className="border-t border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
                 Debits (${je.debitTotal.toFixed(2)}) ≠ Credits (${je.creditTotal.toFixed(2)}). Difference: ${(je.debitTotal - je.creditTotal).toFixed(2)}. The Gusto totals include employee deductions that net inside the CRs — review lines before posting.
               </div>
+            )}
+            {gustoTotals && (
+              <BalanceDebug totals={gustoTotals} je={je} />
             )}
           </div>
         </div>
@@ -1109,4 +1208,148 @@ function customerJeLinesToCsv(lines: CustomerJeLine[], je: JournalEntry): string
   const creditTotal = Math.round(je.summaryRows.reduce((s, r) => s + r.credit, 0) * 100) / 100;
   rows.push(["", "Totals", "", debitTotal.toFixed(2), creditTotal.toFixed(2)].join(","));
   return rows.join("\n");
+}
+
+// ── Balance debug panel ────────────────────────────────────────────────────
+//
+// Shows the JE math from the Gusto totals row vs what we actually DR'd / CR'd.
+// Helps spot where an unbalanced JE is leaking — usually an earnings or
+// benefit column the parser doesn't read.
+
+function BalanceDebug({ totals, je }: { totals: GustoEmployee; je: JournalEntry }) {
+  const fmt = (n: number) => `$${n.toFixed(2)}`;
+  const t = totals;
+
+  // Wage DR basis: gross − imputed − time off (PTO routes to 202060)
+  const wagesDrBasis = t.grossEarnings - t.imputedPay - t.timeOffAmount;
+  const cashWages = wagesDrBasis;
+
+  // What SHOULD be on the DR side based on Gusto totals
+  const expectedDr = {
+    "wages (gross − imputed − PTO)":  wagesDrBasis,
+    "timeOffAmount → 202060 PTO":     t.timeOffAmount,
+    "cellPhoneReimbursement":         t.cellPhoneReimbursement,
+    "employerTaxes": t.employerTaxes,
+    "medicalInsuranceEmployer": t.medicalInsuranceEmployer,
+    "dentalInsuranceEmployer": t.dentalInsuranceEmployer,
+    "visionEmployer": t.visionEmployer,
+    "principalLifeEmployer": t.principalLifeEmployer,
+    "voluntaryLifeEmployer": t.voluntaryLifeEmployer,
+    "aflacPreEmployer": t.aflacPreEmployer,
+    "aflacAfterEmployer": t.aflacAfterEmployer,
+    "hsaEmployer": t.hsaEmployer,
+    "trad401kEmployer": t.trad401kEmployer,
+    "roth401kEmployer": t.roth401kEmployer,
+  };
+
+  // What SHOULD be on the CR side. Gusto's netPay does NOT include cell
+  // phone reimbursement, so we credit it as a separate line to 202010.
+  const expectedCr = {
+    "netPay": t.netPay,
+    "cellPhoneReimbursement (paid)": t.cellPhoneReimbursement,
+    "employerTaxes (in 202040)": t.employerTaxes,
+    "employeeTaxes (in 202040)": t.employeeTaxes,
+    "trad401k total (ee+er)": t.trad401kEmployee + t.trad401kEmployer,
+    "roth401k total (ee+er)": t.roth401kEmployee + t.roth401kEmployer,
+    "trad401kLoan": t.trad401kLoan,
+    "hsa total (ee+er)": t.hsaEmployee + t.hsaEmployer,
+    "medical total (ee+er)": t.medicalInsuranceEmployee + t.medicalInsuranceEmployer,
+    "dental total (ee+er)": t.dentalInsuranceEmployee + t.dentalInsuranceEmployer,
+    "aflacPre total (ee+er)": t.aflacPreEmployee + t.aflacPreEmployer,
+    "aflacAfter total (ee+er)": t.aflacAfterEmployee + t.aflacAfterEmployer,
+    "principalLife total (ee+er)": t.principalLifeEmployee + t.principalLifeEmployer,
+    "vision total (ee+er)": t.visionEmployee + t.visionEmployer,
+    "voluntaryLife total (ee+er)": t.voluntaryLifeEmployee + t.voluntaryLifeEmployer,
+  };
+
+  const expDrTotal = Object.values(expectedDr).reduce((s, v) => s + v, 0);
+  const expCrTotal = Object.values(expectedCr).reduce((s, v) => s + v, 0);
+
+  // Math identity check
+  // DR should equal CR if grossEarnings - imputed accurately reflects cash wages
+  // and netPay = (gross - imputed) - eeTaxes - eeDeductions + cellPhoneReimbursement
+  const eeDeductionsCalc =
+    t.trad401kEmployee + t.roth401kEmployee + t.trad401kLoan +
+    t.hsaEmployee + t.medicalInsuranceEmployee + t.dentalInsuranceEmployee +
+    t.aflacPreEmployee + t.aflacAfterEmployee + t.principalLifeEmployee +
+    t.visionEmployee + t.voluntaryLifeEmployee;
+  // Gusto's netPay = (wages + PTO) - eeTaxes - eeDeductions (no cellPhone)
+  // We add timeOffAmount back here because Gusto's netPay reflects total
+  // taxable earnings — even though we route PTO to 202060 separately on
+  // the DR side, the employee's net pay still includes those PTO dollars.
+  const impliedNetPay = cashWages + t.timeOffAmount - t.employeeTaxes - eeDeductionsCalc;
+  const netPayDelta = t.netPay - impliedNetPay;
+
+  return (
+    <div className="border-t border-slate-200 bg-slate-50 px-3 py-3 text-xs">
+      <div className="font-semibold text-slate-700 mb-2">JE balance debug (from Gusto totals row)</div>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <div className="font-medium text-slate-600 mb-1">Expected DR components</div>
+          <table className="w-full">
+            <tbody>
+              {Object.entries(expectedDr).map(([k, v]) => (
+                <tr key={k} className="border-t border-slate-200">
+                  <td className="py-0.5 pr-2 text-slate-600 font-mono text-[11px]">{k}</td>
+                  <td className="py-0.5 text-right tabular-nums">{fmt(v)}</td>
+                </tr>
+              ))}
+              <tr className="border-t-2 border-slate-400 font-semibold">
+                <td className="py-0.5 pr-2">Total DR</td>
+                <td className="py-0.5 text-right tabular-nums">{fmt(expDrTotal)}</td>
+              </tr>
+              <tr>
+                <td className="py-0.5 pr-2 text-slate-500">JE actual DR</td>
+                <td className="py-0.5 text-right tabular-nums text-slate-500">{fmt(je.debitTotal)}</td>
+              </tr>
+              <tr className={Math.abs(expDrTotal - je.debitTotal) >= 0.01 ? "text-red-600" : "text-emerald-700"}>
+                <td className="py-0.5 pr-2">Δ (expected − actual)</td>
+                <td className="py-0.5 text-right tabular-nums">{fmt(expDrTotal - je.debitTotal)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div>
+          <div className="font-medium text-slate-600 mb-1">Expected CR components</div>
+          <table className="w-full">
+            <tbody>
+              {Object.entries(expectedCr).map(([k, v]) => (
+                <tr key={k} className="border-t border-slate-200">
+                  <td className="py-0.5 pr-2 text-slate-600 font-mono text-[11px]">{k}</td>
+                  <td className="py-0.5 text-right tabular-nums">{fmt(v)}</td>
+                </tr>
+              ))}
+              <tr className="border-t-2 border-slate-400 font-semibold">
+                <td className="py-0.5 pr-2">Total CR</td>
+                <td className="py-0.5 text-right tabular-nums">{fmt(expCrTotal)}</td>
+              </tr>
+              <tr>
+                <td className="py-0.5 pr-2 text-slate-500">JE actual CR</td>
+                <td className="py-0.5 text-right tabular-nums text-slate-500">{fmt(je.creditTotal)}</td>
+              </tr>
+              <tr className={Math.abs(expCrTotal - je.creditTotal) >= 0.01 ? "text-red-600" : "text-emerald-700"}>
+                <td className="py-0.5 pr-2">Δ (expected − actual)</td>
+                <td className="py-0.5 text-right tabular-nums">{fmt(expCrTotal - je.creditTotal)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="mt-3 border-t border-slate-200 pt-2">
+        <div className="font-medium text-slate-600 mb-1">Net Pay reconciliation</div>
+        <div className="font-mono text-[11px] text-slate-600 leading-5">
+          impliedNetPay = cashWages − employeeTaxes − eeDeductions<br />
+          {"           "} = {fmt(cashWages)} − {fmt(t.employeeTaxes)} − {fmt(eeDeductionsCalc)}<br />
+          {"           "} = {fmt(impliedNetPay)}<br />
+          gusto netPay = {fmt(t.netPay)}<br />
+          <span className={Math.abs(netPayDelta) >= 0.01 ? "text-red-600 font-semibold" : "text-emerald-700"}>
+            Δ (gusto − implied) = {fmt(netPayDelta)}
+            {Math.abs(netPayDelta) >= 0.01 && " ← unaccounted-for amount in Gusto's net pay calc"}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
 }
